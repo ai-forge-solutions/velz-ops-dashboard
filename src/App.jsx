@@ -4,6 +4,7 @@ import {
   ChevronUp, ChevronDown, Plus, Trash2, CalendarClock, Pause,
   PlayCircle, Users, ChevronRight, Info, RotateCcw
 } from "lucide-react";
+import { loadDashboardBrands } from "./supabaseData";
 
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
@@ -23,38 +24,6 @@ const SERVICES = [
 ];
 
 const WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
-
-// Seed data pulled live from Supabase project `velz-outreach`
-// (ealbeiqstgqsdjmobxly) on 2026-07-08. `susmies` is the only brand with
-// real service_runs rows today; the rest reflect real brand records with
-// no runs yet — that emptiness is real, not a placeholder.
-const SEED_BRANDS = [
-  { id: "susmies", name: "susmies", domain: "susmies.com", fit: 100, revenue: 417312,
-    runs: {
-      brand_context: { status: "error", started_at: "2026-07-08T00:34:59Z", duration_ms: 299 },
-      brand_reviews: { status: "success", started_at: "2026-07-08T00:34:51Z", duration_ms: 7729 },
-      meta_ad_library_scraper: { status: "success", started_at: "2026-07-08T00:33:22Z", duration_ms: 86532 },
-      web_stack_wappalyzer: { status: "success", started_at: "2026-07-08T00:34:49Z", duration_ms: 2071 },
-    } },
-  { id: "structuralia", name: "Structuralia", domain: "structuralia.com", fit: 100, revenue: 321892, runs: {} },
-  { id: "aprilplants", name: "April Plants", domain: "aprilplants.com", fit: 100, revenue: 337334, runs: {} },
-  { id: "dreesmann", name: "Atelier Madre", domain: "manuel-dreesmann.com", fit: 100, revenue: 310579, runs: {} },
-  { id: "molisandco", name: "molis&co", domain: "molisandco.com", fit: 100, revenue: 260123, runs: {} },
-  { id: "neomusica", name: "NEOmúsica", domain: "neomusica.es", fit: 100, revenue: 345964, runs: {} },
-  { id: "customima", name: "Customima", domain: "customima.com", fit: 100, revenue: 417962, runs: {} },
-  { id: "zacaris", name: "Zacaris", domain: "zacaris.com", fit: 100, revenue: 258472, runs: {} },
-  { id: "verbenas", name: "Verbenas", domain: "verbenas.com", fit: 100, revenue: 358062, runs: {} },
-  { id: "ribescasals", name: "Ribes & Casals", domain: "ribescasals.com", fit: 100, revenue: 430999, runs: {} },
-  { id: "maisonh", name: "Maison Hotel", domain: "maisonh.com", fit: 100, revenue: 369207, runs: {} },
-  { id: "alhambra", name: "Alhambra Guitarras", domain: "alhambraguitarras.com", fit: 100, revenue: 369829, runs: {} },
-  { id: "enterticket", name: "Enterticket", domain: "enterticket.es", fit: 100, revenue: 436635, runs: {} },
-  { id: "226ers", name: "226ERS", domain: "226ers.com", fit: 100, revenue: 326682, runs: {} },
-  { id: "prettyballerinas", name: "Pretty Ballerinas", domain: "prettyballerinas.com", fit: 100, revenue: 271973, runs: {} },
-  { id: "flordeasoka", name: "flordeasoka", domain: "flordeasoka.com", fit: 100, revenue: 225399, runs: {} },
-  { id: "aldous", name: "Aldous", domain: "aldousbio.com", fit: 100, revenue: 231881, runs: {} },
-  { id: "ivbwellness", name: "IVB Wellness Lab", domain: "ivbwellness.com", fit: 100, revenue: 235350, runs: {} },
-  { id: "prettyballerinasus", name: "PrettyBallerinas USA", domain: "prettyballerinas.us", fit: 100, revenue: 415547, runs: {} },
-];
 
 const COLORS = {
   ink: "#14161A",
@@ -132,13 +101,35 @@ function StatusLabel({ status }) {
 // ---------------------------------------------------------------------------
 export default function App() {
   const [tab, setTab] = useState("runs");
-  const [brands, setBrands] = useState(SEED_BRANDS);
+  const [brands, setBrands] = useState([]);
+  const [loadingBrands, setLoadingBrands] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [popover, setPopover] = useState(null); // {brandId, serviceKey}
   const [cascades, setCascades] = useState([]);
   const [loadedStorage, setLoadedStorage] = useState(false);
   const popRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBrands() {
+      setLoadingBrands(true);
+      setLoadError(null);
+      try {
+        const rows = await loadDashboardBrands();
+        if (!cancelled) setBrands(rows);
+      } catch (error) {
+        if (!cancelled) setLoadError(error);
+      } finally {
+        if (!cancelled) setLoadingBrands(false);
+      }
+    }
+
+    loadBrands();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     try {
@@ -241,6 +232,7 @@ export default function App() {
       {tab === "runs" ? (
         <RunsView
           brands={filtered} search={search} setSearch={setSearch}
+          loading={loadingBrands} error={loadError}
           selected={selected} toggleRow={toggleRow}
           triggerService={triggerService} triggerPipeline={triggerPipeline} triggerBulk={triggerBulk}
           popover={popover} setPopover={setPopover} popRef={popRef}
@@ -256,7 +248,7 @@ export default function App() {
 }
 
 // ---------------------------------------------------------------------------
-function RunsView({ brands, search, setSearch, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef }) {
+function RunsView({ brands, search, setSearch, loading, error, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef }) {
   return (
     <div className="px-6 py-5">
       {/* Toolbar */}
@@ -298,7 +290,28 @@ function RunsView({ brands, search, setSearch, selected, toggleRow, triggerServi
             </tr>
           </thead>
           <tbody>
-            {brands.map((b, i) => (
+            {loading && (
+              <tr>
+                <td colSpan={SERVICES.length + 4} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>
+                  <span className="inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Cargando datos reales desde Supabase…</span>
+                </td>
+              </tr>
+            )}
+            {!loading && error && (
+              <tr>
+                <td colSpan={SERVICES.length + 4} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>
+                  No se pudieron leer los datos reales de Supabase: {error.message}
+                </td>
+              </tr>
+            )}
+            {!loading && !error && brands.length === 0 && (
+              <tr>
+                <td colSpan={SERVICES.length + 4} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>
+                  No hay marcas en Supabase para mostrar.
+                </td>
+              </tr>
+            )}
+            {!loading && !error && brands.map((b, i) => (
               <tr key={b.id} style={{ borderBottom: `1px solid ${COLORS.line}`, background: selected.has(b.id) ? "#F6F8F6" : i % 2 ? "#FDFDFC" : "#fff" }}>
                 <td className="text-center">
                   <input type="checkbox" checked={selected.has(b.id)} onChange={() => toggleRow(b.id)} />
@@ -335,7 +348,7 @@ function RunsView({ brands, search, setSearch, selected, toggleRow, triggerServi
 
       <div className="mt-3 text-[11px] flex items-start gap-1.5" style={{ color: COLORS.muted }}>
         <Info size={13} className="mt-0.5 shrink-0" />
-        <span>Marcas y estado real leídos del proyecto Supabase <span className="mono">velz-outreach</span> (8 jul 2026). Solo <span className="mono">susmies</span> tiene ejecuciones reales hoy; el resto está sin ejecutar — es el estado real, no un placeholder. Las llamadas al orquestador están mockeadas: "Ejecutar" simula una respuesta en 1-2.5s con ~78% de éxito.</span>
+        <span>Marcas y estado leídos en vivo desde Supabase <span className="mono">velz-outreach</span>. Las llamadas al orquestador siguen pendientes de endpoint seguro: "Ejecutar" actualiza la fila localmente para previsualizar la interacción.</span>
       </div>
     </div>
   );
