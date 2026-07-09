@@ -11,6 +11,17 @@ npm install
 npm run dev
 ```
 
+## Acceso de seguridad
+
+El dashboard queda protegido en Netlify con una Edge Function de autenticación HTTP Basic antes de servir la app. Configura estas variables en Netlify (**Site settings → Environment variables**) antes de desplegar:
+
+```bash
+VELZ_DASHBOARD_USERNAME=miguel
+VELZ_DASHBOARD_PASSWORD=<contraseña fuerte generada fuera del repo>
+```
+
+La contraseña real no debe guardarse en Git. Si las variables no están configuradas, Netlify responde `503 Security access is not configured` en vez de dejar el dashboard público.
+
 ## Desplegar en Netlify (primera vez)
 
 1. Crea el repo en GitHub:
