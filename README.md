@@ -17,14 +17,18 @@ La app necesita una `anon key` de Supabase con políticas RLS de solo lectura pa
 
 ## Acceso de seguridad
 
-El dashboard queda protegido en Netlify con una Edge Function de autenticación HTTP Basic antes de servir la app. Configura estas variables en Netlify (**Site settings → Environment variables**) antes de desplegar:
+El dashboard queda protegido en Netlify con una Edge Function antes de servir la app. Si no hay una sesión válida, Netlify muestra una pantalla de acceso propia en `/auth/login` en vez de disparar el diálogo nativo del navegador. Al iniciar sesión se guarda una cookie `HttpOnly`/`Secure` durante 30 días para no pedir las credenciales en cada visita.
+
+Configura estas variables en Netlify (**Site settings → Environment variables**) antes de desplegar:
 
 ```bash
 VELZ_DASHBOARD_USERNAME=miguel
 VELZ_DASHBOARD_PASSWORD=<contraseña fuerte generada fuera del repo>
+# opcional, si quieres poder rotar la contraseña sin invalidar sesiones ya abiertas
+VELZ_DASHBOARD_SESSION_SECRET=<secreto fuerte generado fuera del repo>
 ```
 
-La contraseña real no debe guardarse en Git. Si las variables no están configuradas, Netlify responde `503 Security access is not configured` en vez de dejar el dashboard público.
+La contraseña real y el secreto de sesión no deben guardarse en Git. Si usuario o contraseña no están configurados, Netlify responde `503 Security access is not configured` en vez de dejar el dashboard público.
 
 ## Desplegar en Netlify (primera vez)
 
