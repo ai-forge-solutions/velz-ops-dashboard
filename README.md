@@ -2,14 +2,33 @@
 
 Panel operativo diario del pipeline de Velz Auto-Outreach: marcas (filas) × microservicios (columnas), con trigger ad-hoc y cascadas programadas.
 
-**Estado actual: datos mock.** Las marcas y el estado inicial vienen de una foto real de Supabase (`velz-outreach`, 8 jul 2026); los triggers ("Ejecutar ahora") simulan la respuesta del orquestador (1–2.5s, ~78% éxito) en vez de llamar a Azure de verdad. Las cascadas guardadas persisten en `localStorage` del navegador (solo en tu máquina, no compartido entre dispositivos).
+**Estado actual: datos reales de Supabase.** Las marcas se leen en vivo desde las tablas `brands` y `service_runs` del proyecto `velz-outreach`; cada celda muestra la última ejecución conocida por marca/servicio. Los triggers ("Ejecutar ahora") todavía actualizan solo la UI localmente porque necesitan un endpoint backend seguro para llamar al orquestador sin exponer credenciales en el navegador. Las cascadas guardadas persisten en `localStorage` del navegador (solo en tu máquina, no compartido entre dispositivos).
 
 ## Desarrollo local
 
 ```bash
 npm install
+cp .env.example .env.local
+# rellena VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY
 npm run dev
 ```
+
+La app necesita una `anon key` de Supabase con políticas RLS de solo lectura para `brands` y `service_runs`. No uses la service-role key en Vite/Netlify: cualquier variable `VITE_*` se publica al navegador.
+
+## Acceso de seguridad
+
+El dashboard queda protegido en Netlify con una Edge Function antes de servir la app. Si no hay una sesión válida, Netlify muestra una pantalla de acceso propia en `/auth/login` en vez de disparar el diálogo nativo del navegador. Al iniciar sesión se guarda una cookie `HttpOnly`/`Secure` durante 30 días para no pedir las credenciales en cada visita.
+
+Configura estas variables en Netlify (**Site settings → Environment variables**) antes de desplegar:
+
+```bash
+VELZ_DASHBOARD_USERNAME=miguel
+VELZ_DASHBOARD_PASSWORD=<contraseña fuerte generada fuera del repo>
+# opcional, si quieres poder rotar la contraseña sin invalidar sesiones ya abiertas
+VELZ_DASHBOARD_SESSION_SECRET=<secreto fuerte generado fuera del repo>
+```
+
+La contraseña real y el secreto de sesión no deben guardarse en Git. Si usuario o contraseña no están configurados, Netlify responde `503 Security access is not configured` en vez de dejar el dashboard público.
 
 ## Desplegar en Netlify (primera vez)
 
@@ -28,12 +47,9 @@ npm run dev
 
 3. Cada `git push` a `main` vuelve a desplegar solo. Para tu uso diario, entra directamente a la URL que te da Netlify (puedes ponerle un dominio propio en Site settings → Domain management, o quedarte con el `*.netlify.app` gratuito).
 
-## Cuándo pasar a datos reales (siguiente fase, no incluida aún)
+## Pendiente para triggers reales
 
-Dos cosas deben pasar antes de conectar Supabase de verdad:
-
-1. **Arreglar RLS.** Hoy 21 tablas de `velz-outreach` tienen Row Level Security desactivado — el `anon key` da acceso total de lectura/escritura a leads reales. Hay que activar RLS + políticas de solo-lectura antes de meter el `anon key` en este frontend.
-2. **Endpoint de orquestación real.** Los triggers de servicio y cascada necesitan un backend (función serverless de Netlify, o un endpoint en tu infra de Azure) que llame a los Container Apps Jobs con credenciales que nunca deben vivir en el navegador. `triggerService` y `runNow` en `src/App.jsx` son los dos puntos a sustituir por `fetch()` reales cuando ese endpoint exista.
+Los triggers de servicio y cascada necesitan un backend (función serverless de Netlify, o un endpoint en tu infra de Azure) que llame a los Container Apps Jobs con credenciales que nunca deben vivir en el navegador. `triggerService` y `runNow` en `src/App.jsx` son los dos puntos a sustituir por `fetch()` reales cuando ese endpoint exista.
 
 ## Estructura
 
