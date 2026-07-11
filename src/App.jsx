@@ -5,6 +5,7 @@ import {
   PlayCircle, Users, ChevronRight, Info, RotateCcw
 } from "lucide-react";
 import { loadDashboardBrands } from "./supabaseData";
+import BrandDrawer from "./BrandDrawer";
 
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
@@ -107,6 +108,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [popover, setPopover] = useState(null); // {brandId, serviceKey}
+  const [drawerBrand, setDrawerBrand] = useState(null);
   const [cascades, setCascades] = useState([]);
   const [loadedStorage, setLoadedStorage] = useState(false);
   const popRef = useRef(null);
@@ -236,6 +238,7 @@ export default function App() {
           selected={selected} toggleRow={toggleRow}
           triggerService={triggerService} triggerPipeline={triggerPipeline} triggerBulk={triggerBulk}
           popover={popover} setPopover={setPopover} popRef={popRef}
+          openBrandDrawer={setDrawerBrand}
         />
       ) : (
         <CascadesView
@@ -243,12 +246,14 @@ export default function App() {
           triggerService={triggerService}
         />
       )}
+
+      <BrandDrawer brand={drawerBrand} onClose={() => setDrawerBrand(null)} />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-function RunsView({ brands, search, setSearch, loading, error, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef }) {
+function RunsView({ brands, search, setSearch, loading, error, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer }) {
   return (
     <div className="px-6 py-5">
       {/* Toolbar */}
@@ -317,8 +322,15 @@ function RunsView({ brands, search, setSearch, loading, error, selected, toggleR
                   <input type="checkbox" checked={selected.has(b.id)} onChange={() => toggleRow(b.id)} />
                 </td>
                 <td className="px-3 py-2.5">
-                  <div className="font-medium">{b.name}</div>
-                  <div className="mono text-[11px]" style={{ color: COLORS.muted }}>{b.domain}</div>
+                  <button
+                    type="button"
+                    onClick={() => openBrandDrawer(b)}
+                    className="group text-left"
+                    title="Abrir panel de verificación de marca"
+                  >
+                    <div className="font-medium underline-offset-2 group-hover:underline">{b.name}</div>
+                    <div className="mono text-[11px]" style={{ color: COLORS.muted }}>{b.domain}</div>
+                  </button>
                 </td>
                 <td className="px-3 py-2.5 text-right mono">{fmtMoney(b.revenue)}</td>
                 {SERVICES.map(s => (
