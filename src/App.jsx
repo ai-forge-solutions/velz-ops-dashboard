@@ -5,7 +5,12 @@ import {
   PlayCircle, Users, ChevronRight, Info, RotateCcw
 } from "lucide-react";
 import { loadDashboardBrands } from "./supabaseData";
-
+import {
+  conductorServiceAvailable,
+  runConductorPipeline,
+  runConductorService,
+} from "./conductorApi";
+import BrandDrawer from "./BrandDrawer";
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
 // in the velz-outreach Supabase project. Services marked deployed:false have
@@ -111,6 +116,58 @@ export default function App() {
   const [loadedStorage, setLoadedStorage] = useState(false);
   const popRef = useRef(null);
 
+  const [actionMessage, setActionMessage] = useState(null);
+
+  async function refreshDashboardBrands({ showLoading = false } = {}) {
+    if (showLoading) setLoadingBrands(true);
+    setLoadError(null);
+    try {
+      const rows = await loadDashboardBrands();
+      setBrands(rows);
+      return rows;
+    } catch (error) {
+      setLoadError(error);
+      throw error;
+    } finally {
+      if (showLoading) setLoadingBrands(false);
+    }
+  }
+
+  function updateRun(brandId, serviceKey, patch) {
+    setBrands(prev => prev.map(b => b.id !== brandId ? b : {
+      ...b,
+      runs: {
+        ...b.runs,
+        [serviceKey]: {
+          ...b.runs[serviceKey],
+          ...patch,
+        },
+      },
+    }));
+  }
+
+  function markServiceRunning(brandId, serviceKey) {
+    updateRun(brandId, serviceKey, {
+      status: "running",
+      started_at: new Date().toISOString(),
+      duration_ms: null,
+      message: "Ejecutando en el orquestador…",
+    });
+  }
+
+  function markServiceFinished(brandId, serviceKey, result, fallbackMessage) {
+    const success = Boolean(result?.success);
+    updateRun(brandId, serviceKey, {
+      status: success ? "success" : "error",
+      service_run_id: result?.service_run_id,
+      message: result?.message || fallbackMessage,
+    });
+    setActionMessage({
+      tone: success ? "success" : "error",
+      text: `${serviceKey}: ${result?.message || fallbackMessage}`,
+    });
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -153,35 +210,74 @@ export default function App() {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  // -- Mocked orchestrator call ---------------------------------------------
-  function triggerService(brandId, serviceKey) {
-    setBrands(prev => prev.map(b => b.id !== brandId ? b : {
-      ...b, runs: { ...b.runs, [serviceKey]: { status: "running", started_at: new Date().toISOString(), duration_ms: null } }
-    }));
-    const delay = 900 + Math.random() * 1600;
-    setTimeout(() => {
-      const ok = Math.random() > 0.22;
-      setBrands(prev => prev.map(b => b.id !== brandId ? b : {
-        ...b, runs: {
-          ...b.runs,
-          [serviceKey]: {
-            status: ok ? "success" : "error",
-            started_at: b.runs[serviceKey]?.started_at || new Date().toISOString(),
-            duration_ms: Math.round(delay),
-          }
+  // -- Real conductor calls --------------------------------------------------
+  async function triggerService(brandId, serviceKey) {
+    if (!conductorServiceAvailable(serviceKey)) {
+      const text = "Este servicio aún no tiene endpoint desplegado en el orquestador.";
+      updateRun(brandId, serviceKey, { status: "skipped", message: text });
+      setActionMessage({ tone: "warning", text });
+      return;
+    }
+
+    markServiceRunning(brandId, serviceKey);
+    try {
+      const result = await runConductorService(brandId, serviceKey);
+      markServiceFinished(brandId, serviceKey, result, "El orquestador terminó sin mensaje.");
+    } catch (error) {
+      updateRun(brandId, serviceKey, {
+        status: "error",
+        message: error.message || "No se pudo llamar al orquestador.",
+      });
+      setActionMessage({ tone: "error", text: error.message || "No se pudo llamar al orquestador." });
+    } finally {
+      try {
+        await refreshDashboardBrands();
+      } catch (error) {
+        setActionMessage({ tone: "error", text: `El servicio terminó, pero no se pudo refrescar Supabase: ${error.message}` });
+      }
+    }
+  }
+
+  async function triggerPipeline(brandId) {
+    const runnableServices = SERVICES.filter(s => s.deployed && conductorServiceAvailable(s.key));
+    runnableServices.forEach(s => markServiceRunning(brandId, s.key));
+
+    try {
+      const result = await runConductorPipeline(brandId);
+      const results = Array.isArray(result?.results) ? result.results : [];
+      results.forEach(serviceResult => {
+        if (serviceResult?.service_key) {
+          markServiceFinished(brandId, serviceResult.service_key, serviceResult, serviceResult.message);
         }
+      });
+      if (!result?.success) {
+        const text = "El pipeline terminó con errores en el orquestador.";
+        runnableServices
+          .filter(s => !results.some(r => r?.service_key === s.key))
+          .forEach(s => updateRun(brandId, s.key, { status: "error", message: text }));
+        setActionMessage({ tone: "error", text });
+      } else {
+        setActionMessage({ tone: "success", text: "Pipeline ejecutado y persistido por el orquestador." });
+      }
+    } catch (error) {
+      runnableServices.forEach(s => updateRun(brandId, s.key, {
+        status: "error",
+        message: error.message || "No se pudo ejecutar el pipeline.",
       }));
-    }, delay);
+      setActionMessage({ tone: "error", text: error.message || "No se pudo ejecutar el pipeline." });
+    } finally {
+      try {
+        await refreshDashboardBrands();
+      } catch (error) {
+        setActionMessage({ tone: "error", text: `El pipeline terminó, pero no se pudo refrescar Supabase: ${error.message}` });
+      }
+    }
   }
 
-  function triggerPipeline(brandId) {
-    SERVICES.forEach((s, i) => {
-      setTimeout(() => triggerService(brandId, s.key), i * 350);
-    });
-  }
-
-  function triggerBulk(serviceKey) {
-    selected.forEach(id => triggerService(id, serviceKey));
+  async function triggerBulk(serviceKey) {
+    for (const id of selected) {
+      await triggerService(id, serviceKey);
+    }
   }
 
   const filtered = brands.filter(b =>
@@ -233,9 +329,11 @@ export default function App() {
         <RunsView
           brands={filtered} search={search} setSearch={setSearch}
           loading={loadingBrands} error={loadError}
+          actionMessage={actionMessage} clearActionMessage={() => setActionMessage(null)}
           selected={selected} toggleRow={toggleRow}
           triggerService={triggerService} triggerPipeline={triggerPipeline} triggerBulk={triggerBulk}
           popover={popover} setPopover={setPopover} popRef={popRef}
+          openBrandDrawer={setDrawerBrand}
         />
       ) : (
         <CascadesView
@@ -243,12 +341,14 @@ export default function App() {
           triggerService={triggerService}
         />
       )}
+
+      <BrandDrawer brand={drawerBrand} onClose={() => setDrawerBrand(null)} />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-function RunsView({ brands, search, setSearch, loading, error, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef }) {
+function RunsView({ brands, search, setSearch, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer }) {
   return (
     <div className="px-6 py-5">
       {/* Toolbar */}
@@ -269,6 +369,20 @@ function RunsView({ brands, search, setSearch, loading, error, selected, toggleR
           <Legend />
         </div>
       </div>
+
+      {actionMessage && (
+        <div
+          className="mb-4 flex items-start justify-between gap-3 rounded-md px-3 py-2 text-xs"
+          style={{
+            border: `1px solid ${actionMessage.tone === "error" ? COLORS.red : actionMessage.tone === "warning" ? COLORS.amber : COLORS.green}`,
+            color: actionMessage.tone === "error" ? COLORS.red : actionMessage.tone === "warning" ? COLORS.amber : COLORS.green,
+            background: "#fff",
+          }}
+        >
+          <span>{actionMessage.text}</span>
+          <button onClick={clearActionMessage} className="mono text-[10px] uppercase">cerrar</button>
+        </div>
+      )}
 
       {/* Table */}
       <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${COLORS.line}` }}>
@@ -317,8 +431,15 @@ function RunsView({ brands, search, setSearch, loading, error, selected, toggleR
                   <input type="checkbox" checked={selected.has(b.id)} onChange={() => toggleRow(b.id)} />
                 </td>
                 <td className="px-3 py-2.5">
-                  <div className="font-medium">{b.name}</div>
-                  <div className="mono text-[11px]" style={{ color: COLORS.muted }}>{b.domain}</div>
+                  <button
+                    type="button"
+                    onClick={() => openBrandDrawer(b)}
+                    className="group text-left"
+                    title="Abrir panel de verificación de marca"
+                  >
+                    <div className="font-medium underline-offset-2 group-hover:underline">{b.name}</div>
+                    <div className="mono text-[11px]" style={{ color: COLORS.muted }}>{b.domain}</div>
+                  </button>
                 </td>
                 <td className="px-3 py-2.5 text-right mono">{fmtMoney(b.revenue)}</td>
                 {SERVICES.map(s => (
@@ -348,7 +469,7 @@ function RunsView({ brands, search, setSearch, loading, error, selected, toggleR
 
       <div className="mt-3 text-[11px] flex items-start gap-1.5" style={{ color: COLORS.muted }}>
         <Info size={13} className="mt-0.5 shrink-0" />
-        <span>Marcas y estado leídos en vivo desde Supabase <span className="mono">velz-outreach</span>. Las llamadas al orquestador siguen pendientes de endpoint seguro: "Ejecutar" actualiza la fila localmente para previsualizar la interacción.</span>
+        <span>Marcas y estado leídos en vivo desde Supabase <span className="mono">velz-outreach</span>. “Ejecutar ahora”, Pipeline y cascadas llaman al conductor configurado en <span className="mono">VITE_CONDUCTOR_BASE_URL</span>; al terminar se refrescan las ejecuciones persistidas.</span>
       </div>
     </div>
   );
@@ -383,9 +504,10 @@ function BulkTrigger({ onTrigger }) {
       {open && (
         <div className="absolute z-20 mt-1 rounded-md shadow-lg py-1 w-48" style={{ background: "#fff", border: `1px solid ${COLORS.line}` }}>
           {SERVICES.map(s => (
-            <button key={s.key} onClick={() => { onTrigger(s.key); setOpen(false); }}
-              className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-gray-50">
-              {s.label}
+            <button key={s.key} onClick={() => { if (s.deployed) onTrigger(s.key); setOpen(false); }}
+              disabled={!s.deployed}
+              className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-45">
+              {s.label}{!s.deployed ? " · no desplegado" : ""}
             </button>
           ))}
         </div>
@@ -410,15 +532,21 @@ function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
           Inicio: {fmtTime(run.started_at)} · Duración: {fmtDuration(run.duration_ms)}
         </div>
       )}
+      {run?.message && (
+        <div className="text-[10px] mb-2" style={{ color: status === "error" ? COLORS.red : COLORS.muted }}>
+          {run.message}
+        </div>
+      )}
       {!service.deployed && (
         <div className="text-[10px] mb-2 flex items-start gap-1" style={{ color: COLORS.amber }}>
           <AlertTriangle size={11} className="mt-0.5 shrink-0" /> Este servicio aún no está desplegado en el orquestador.
         </div>
       )}
       <button onClick={onTrigger}
-        className="w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] font-medium"
-        style={{ background: COLORS.ink, color: "#fff" }}>
-        <RotateCcw size={11} /> Ejecutar ahora
+        disabled={!service.deployed}
+        className="w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-45"
+        style={{ background: service.deployed ? COLORS.ink : COLORS.line, color: service.deployed ? "#fff" : COLORS.muted }}>
+        <RotateCcw size={11} /> {service.deployed ? "Ejecutar ahora" : "No disponible"}
       </button>
     </div>
   );
@@ -470,7 +598,7 @@ function CascadesView({ brands, selected, cascades, setCascades, triggerService 
     });
   }
 
-  const availableToAdd = SERVICES.filter(s => !steps.some(st => st.key === s.key));
+  const availableToAdd = SERVICES.filter(s => s.deployed && !steps.some(st => st.key === s.key));
 
   return (
     <div className="px-6 py-5 grid grid-cols-2 gap-6">
