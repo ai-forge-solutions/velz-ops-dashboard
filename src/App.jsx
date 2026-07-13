@@ -112,6 +112,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [popover, setPopover] = useState(null); // {brandId, serviceKey}
+  const [drawerBrand, setDrawerBrand] = useState(null);
   const [cascades, setCascades] = useState([]);
   const [loadedStorage, setLoadedStorage] = useState(false);
   const popRef = useRef(null);
