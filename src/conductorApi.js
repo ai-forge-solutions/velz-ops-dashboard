@@ -5,6 +5,7 @@ export const CONDUCTOR_ENDPOINTS = {
   meta_ad_library_scraper: "/microservices/meta-ad-library",
   brand_reviews: "/microservices/brand-reviews",
   web_stack_wappalyzer: "/microservices/web-stack",
+  shopify_signals: "/microservices/shopify-signals",
   brand_context: "/microservices/brand-context",
 };
 
