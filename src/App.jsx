@@ -21,7 +21,7 @@ const SERVICES = [
   { key: "meta_ad_library_scraper", label: "Meta Ads", deployed: true },
   { key: "brand_reviews", label: "Reviews", deployed: true },
   { key: "web_stack_wappalyzer", label: "Tech Stack", deployed: true },
-  { key: "shopify_signals", label: "Shopify Signals", deployed: false },
+  { key: "shopify_signals", label: "Shopify Signals", deployed: true },
   { key: "similarweb", label: "SimilarWeb", deployed: false },
   { key: "brand_context", label: "Contexto (Triage)", deployed: true },
   { key: "drafting", label: "Drafting", deployed: false },

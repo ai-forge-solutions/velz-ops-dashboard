@@ -55,7 +55,7 @@ El dashboard llama directamente al conductor de Velz para este MVP interno:
 VITE_CONDUCTOR_BASE_URL=https://velz-signals-conductor-stg.blackocean-de4b65c4.westeurope.azurecontainerapps.io
 ```
 
-Los servicios desplegados (`meta_ad_library_scraper`, `brand_reviews`, `web_stack_wappalyzer`, `brand_context`) envían `{ "supabase_id": "<brands.id>" }` a sus endpoints del conductor. Los servicios sin endpoint (`shopify_signals`, `similarweb`, `drafting`, `export`) se muestran como no desplegados y no disparan llamadas. El botón Pipeline usa `POST /microservices/run-all`; las ejecuciones individuales y cascadas usan el endpoint de cada servicio.
+Los servicios desplegados (`meta_ad_library_scraper`, `brand_reviews`, `web_stack_wappalyzer`, `shopify_signals`, `brand_context`) envían `{ "supabase_id": "<brands.id>" }` a sus endpoints del conductor. `shopify_signals` dispara `POST /microservices/shopify-signals`, que a su vez llama al microservicio Shopify ya integrado por el conductor. Los servicios sin endpoint (`similarweb`, `drafting`, `export`) se muestran como no desplegados y no disparan llamadas. El botón Pipeline usa `POST /microservices/run-all`; las ejecuciones individuales y cascadas usan el endpoint de cada servicio.
 
 ## Estructura
 
