@@ -71,8 +71,21 @@ function LoadingBlock({ label }) {
   );
 }
 
-function EmptyState({ children }) {
-  return <div className="rounded-md p-3 text-xs" style={{ background: COLORS.wash, color: COLORS.muted }}>{children}</div>;
+function EmptyState({ children, tone = COLORS.muted }) {
+  return <div className="rounded-md p-3 text-xs" style={{ background: COLORS.wash, color: tone }}>{children}</div>;
+}
+
+function runElapsed(run) {
+  if (!run?.started_at || run.duration_ms != null) return null;
+  const started = new Date(run.started_at).getTime();
+  if (Number.isNaN(started)) return null;
+  return Math.max(0, Date.now() - started);
+}
+
+function runMetaLine(run) {
+  if (!run?.started_at) return "Sin ejecución registrada";
+  const duration = run.duration_ms != null ? fmtDuration(run.duration_ms) : run.status === "running" ? `${fmtDuration(runElapsed(run))} transcurridos` : "—";
+  return `Última ejecución ${fmtTime(run.started_at)} · ${duration}`;
 }
 
 function SourceCard({ brand, source, state, onOpen }) {
@@ -87,7 +100,7 @@ function SourceCard({ brand, source, state, onOpen }) {
         <div>
           <h3 className="font-medium">{label}</h3>
           <div className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>
-            Última ejecución {fmtTime(run?.started_at)} · {fmtDuration(run?.duration_ms)}
+            {runMetaLine(run)}
           </div>
         </div>
         <Badge status={status} />
@@ -99,19 +112,56 @@ function SourceCard({ brand, source, state, onOpen }) {
           Error al cargar los datos del panel: {state.error.message}. Este fallo es de consulta/red y no cambia el estado del scraper.
         </EmptyState>
       )}
-      {!state.loading && !state.error && source === "metaAds" && <MetaAdsSummary ads={data || []} onOpen={onOpen} />}
-      {!state.loading && !state.error && source === "reviews" && <ReviewsSummary reviews={data || []} onOpen={onOpen} />}
-      {!state.loading && !state.error && source === "techStack" && <TechStackSummary stack={data} onOpen={onOpen} />}
-      {!state.loading && !state.error && source === "context" && <ContextSummary context={data} run={run} />}
+      {!state.loading && !state.error && source !== "metaAds" && status === "not_run" && (
+        <EmptyState>{label} todavía no se ha ejecutado para esta marca.</EmptyState>
+      )}
+      {!state.loading && !state.error && source !== "metaAds" && status === "running" && (
+        <EmptyState><span className="inline-flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> {label} sigue ejecutándose.</span></EmptyState>
+      )}
+      {!state.loading && !state.error && source === "metaAds" && <MetaAdsSummary ads={data || []} run={run} onOpen={onOpen} />}
+      {!state.loading && !state.error && source === "reviews" && status !== "not_run" && status !== "running" && <ReviewsSummary reviews={data || []} onOpen={onOpen} />}
+      {!state.loading && !state.error && source === "techStack" && status !== "not_run" && status !== "running" && <TechStackSummary stack={data} onOpen={onOpen} />}
+      {!state.loading && !state.error && source === "context" && status !== "not_run" && status !== "running" && <ContextSummary context={data} run={run} />}
     </section>
   );
 }
 
-function MetaAdsSummary({ ads, onOpen }) {
+function MetaAdsSummary({ ads, run, onOpen }) {
+  const status = run?.status || "not_run";
   const active = ads.filter((ad) => String(ad.status || "").toUpperCase() === "ACTIVE").length;
+
   if (ads.length === 0) {
-    return <EmptyState>La fuente se ejecutó, pero no devolvió anuncios para esta marca.</EmptyState>;
+    if (status === "error") {
+      return (
+        <EmptyState tone={COLORS.red}>
+          <strong>Sin datos guardados; última ejecución falló.</strong>
+          {run?.message ? <span className="mt-1 block">Último scrape falló: {run.message}</span> : null}
+          <span className="mt-1 block" style={{ color: COLORS.muted }}>{runMetaLine(run)}</span>
+        </EmptyState>
+      );
+    }
+
+    if (status === "running") {
+      return (
+        <EmptyState>
+          <span className="inline-flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Meta Ads sigue ejecutándose.</span>
+          <span className="mt-1 block">Aún no hay anuncios guardados; refresca el panel para ver si el run termina.</span>
+          <span className="mt-1 block mono">{runMetaLine(run)}</span>
+        </EmptyState>
+      );
+    }
+
+    if (status === "success") {
+      return <EmptyState>La fuente terminó correctamente, pero no devolvió anuncios para esta marca.</EmptyState>;
+    }
+
+    if (status === "partial") {
+      return <EmptyState tone={COLORS.amber}>La última ejecución quedó parcial y no dejó anuncios guardados. {run?.message || "Revisa el run antes de asumir que no hay actividad."}</EmptyState>;
+    }
+
+    return <EmptyState>Meta Ads todavía no se ha ejecutado para esta marca.</EmptyState>;
   }
+
   return (
     <div className="space-y-3 text-xs">
       <p><strong>{fmtInt(ads.length)}</strong> anuncios encontrados · <strong>{fmtInt(active)}</strong> activos hoy</p>
@@ -438,7 +488,7 @@ export default function BrandDrawer({ brand, onClose }) {
   const [detailSource, setDetailSource] = useState(null);
   const [sources, setSources] = useState({});
 
-  const runnableServices = useMemo(() => VERIFICATION_SERVICES.filter((service) => brand?.runs?.[service.key]), [brand]);
+  const runnableServices = useMemo(() => VERIFICATION_SERVICES, []);
 
   useEffect(() => {
     if (!brand) return undefined;
