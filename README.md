@@ -15,6 +15,10 @@ npm run dev
 
 La app necesita una `anon key` de Supabase con políticas RLS de solo lectura para `brands` y `service_runs`. No uses la service-role key en Vite/Netlify: cualquier variable `VITE_*` se publica al navegador.
 
+## Límite visual de Meta Ads
+
+`loadMetaAds` mantiene `limit=500` como límite visual del drawer/detalle para evitar respuestas grandes en el navegador. No limita el scraper ni significa que solo existan 500 anuncios; si una marca necesita revisar más volumen, el siguiente paso correcto es paginación/infinite scroll en la vista de detalle.
+
 ## Acceso de seguridad
 
 El dashboard queda protegido en Netlify con una Edge Function antes de servir la app. Si no hay una sesión válida, Netlify muestra una pantalla de acceso propia en `/auth/login` en vez de disparar el diálogo nativo del navegador. Al iniciar sesión se guarda una cookie `HttpOnly`/`Secure` durante 30 días para no pedir las credenciales en cada visita.

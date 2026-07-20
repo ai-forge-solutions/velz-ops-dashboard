@@ -15,8 +15,11 @@ const RUN_FIELDS = [
   "service_key",
   "status",
   "started_at",
+  "finished_at",
   "duration_ms",
   "created_at",
+  "error_payload",
+  "response_payload",
 ].join(",");
 
 const META_AD_FIELDS = [
@@ -112,6 +115,20 @@ function toDashboardBrand(row) {
   };
 }
 
+function runMessage(run) {
+  if (run.error_payload) {
+    const type = run.error_payload.type || run.error_payload.name;
+    const error = run.error_payload.error || run.error_payload.message || run.error_payload.detail;
+    return [type, error].filter(Boolean).join(": ") || JSON.stringify(run.error_payload);
+  }
+
+  if (run.response_payload) {
+    return run.response_payload.message || run.response_payload.error || run.response_payload.detail || null;
+  }
+
+  return null;
+}
+
 function attachLatestRuns(brands, runs) {
   const byBrand = new Map(brands.map((brand) => [brand.id, { ...brand, runs: {} }]));
   const seen = new Set();
@@ -128,7 +145,11 @@ function attachLatestRuns(brands, runs) {
     brand.runs[run.service_key] = {
       status: run.status || "not_run",
       started_at: run.started_at || run.created_at,
+      finished_at: run.finished_at,
       duration_ms: run.duration_ms,
+      message: runMessage(run),
+      error_payload: run.error_payload,
+      response_payload: run.response_payload,
     };
   }
 
@@ -163,6 +184,8 @@ export async function loadMetaAds(brandId) {
     select: META_AD_FIELDS,
     brand_id: `eq.${brandId}`,
     order: "start_date.desc.nullslast",
+    // Visual safety cap for the drawer/detail view. Keep this as a UI limit until
+    // Meta Ads needs true pagination or infinite scroll; it is not a scraper cap.
     limit: "500",
   });
   return supabaseRest("meta_ads", params);
