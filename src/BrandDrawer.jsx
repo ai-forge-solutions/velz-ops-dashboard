@@ -88,6 +88,16 @@ function runMetaLine(run) {
   return `Última ejecución ${fmtTime(run.started_at)} · ${duration}`;
 }
 
+function runSummaryChunks(run) {
+  const summary = run?.response_payload?.summary;
+  if (!summary || typeof summary !== "object") return [];
+  return [
+    summary.ad_count != null ? `ad_count: ${fmtInt(summary.ad_count)}` : null,
+    summary.stop_reason ? `stop_reason: ${summary.stop_reason}` : null,
+    summary.targeting?.view_all_page_id ? `view_all_page_id: ${summary.targeting.view_all_page_id}` : null,
+  ].filter(Boolean);
+}
+
 function SourceCard({ brand, source, state, onOpen }) {
   const run = runForSource(brand, source);
   const status = run?.status || "not_run";
@@ -102,6 +112,20 @@ function SourceCard({ brand, source, state, onOpen }) {
           <div className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>
             {runMetaLine(run)}
           </div>
+          {run?.service_run_id && (
+            <div className="mt-1 break-all mono text-[10px]" style={{ color: COLORS.muted }}>
+              service_run_id: {run.service_run_id}
+            </div>
+          )}
+          {runSummaryChunks(run).length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {runSummaryChunks(run).map((chunk) => (
+                <span key={chunk} className="rounded-full px-2 py-0.5 mono text-[10px]" style={{ background: COLORS.soft, color: COLORS.muted }}>
+                  {chunk}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <Badge status={status} />
       </div>
@@ -165,6 +189,15 @@ function MetaAdsSummary({ ads, run, onOpen }) {
   return (
     <div className="space-y-3 text-xs">
       <p><strong>{fmtInt(ads.length)}</strong> anuncios encontrados · <strong>{fmtInt(active)}</strong> activos hoy</p>
+      {runSummaryChunks(run).length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {runSummaryChunks(run).map((chunk) => (
+            <span key={chunk} className="rounded-full px-2 py-1 mono text-[10px]" style={{ background: COLORS.soft, color: COLORS.muted }}>
+              {chunk}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="space-y-2">
         {ads.slice(0, 2).map((ad, index) => (
           <PreviewRow key={`${ad.title}-${index}`} title={ad.title || "Anuncio sin título"} meta={ad.status || "Sin estado"} body={ad.body_text} />

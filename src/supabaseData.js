@@ -11,6 +11,7 @@ const BRAND_FIELDS = [
 ].join(",");
 
 const RUN_FIELDS = [
+  "id",
   "brand_id",
   "service_key",
   "status",
@@ -20,6 +21,14 @@ const RUN_FIELDS = [
   "created_at",
   "error_payload",
   "response_payload",
+].join(",");
+
+const META_SCRAPE_FIELDS = [
+  "brand_id",
+  "service_run_id",
+  "ad_count",
+  "raw_payload",
+  "created_at",
 ].join(",");
 
 const META_AD_FIELDS = [
@@ -115,25 +124,73 @@ function toDashboardBrand(row) {
   };
 }
 
+function summarizeMetaScrape(scrape) {
+  const raw = scrape?.raw_payload && typeof scrape.raw_payload === "object" ? scrape.raw_payload : {};
+  const rawSummary = raw.summary && typeof raw.summary === "object" ? raw.summary : {};
+  return {
+    ad_count: rawSummary.ad_count ?? raw.ad_count ?? scrape?.ad_count,
+    stop_reason: rawSummary.stop_reason ?? raw.stop_reason,
+    targeting: rawSummary.targeting ?? raw.targeting,
+  };
+}
+
+function mergeMetaScrapeIntoRun(run, scrape) {
+  if (!scrape) return run;
+  const summary = summarizeMetaScrape(scrape);
+  const currentPayload = run.response_payload && typeof run.response_payload === "object" ? run.response_payload : {};
+  const currentSummary = currentPayload.summary && typeof currentPayload.summary === "object" ? currentPayload.summary : {};
+  return {
+    ...run,
+    response_payload: {
+      ...currentPayload,
+      summary: {
+        ...summary,
+        ...currentSummary,
+        targeting: currentSummary.targeting ?? summary.targeting,
+        stop_reason: currentSummary.stop_reason ?? summary.stop_reason,
+        ad_count: currentSummary.ad_count ?? summary.ad_count,
+      },
+    },
+  };
+}
+
 function runMessage(run) {
   if (run.error_payload) {
+    const phase = run.error_payload.phase;
     const type = run.error_payload.type || run.error_payload.name;
     const error = run.error_payload.error || run.error_payload.message || run.error_payload.detail;
-    return [type, error].filter(Boolean).join(": ") || JSON.stringify(run.error_payload);
+    return [phase, type, error].filter(Boolean).join(": ") || JSON.stringify(run.error_payload);
   }
 
   if (run.response_payload) {
+    const summary = run.response_payload.summary && typeof run.response_payload.summary === "object" ? run.response_payload.summary : null;
+    if (summary) {
+      const chunks = [];
+      if (summary.ad_count != null) chunks.push(`${summary.ad_count} ads`);
+      if (summary.stop_reason) chunks.push(`stop_reason=${summary.stop_reason}`);
+      if (summary.targeting?.view_all_page_id) chunks.push(`view_all_page_id=${summary.targeting.view_all_page_id}`);
+      if (chunks.length > 0) return chunks.join(" · ");
+    }
     return run.response_payload.message || run.response_payload.error || run.response_payload.detail || null;
   }
 
   return null;
 }
 
-function attachLatestRuns(brands, runs) {
+function attachLatestRuns(brands, runs, metaScrapes = []) {
   const byBrand = new Map(brands.map((brand) => [brand.id, { ...brand, runs: {} }]));
+  const scrapeByRunId = new Map();
+
+  for (const scrape of metaScrapes) {
+    if (scrape?.service_run_id) scrapeByRunId.set(scrape.service_run_id, scrape);
+  }
   const seen = new Set();
 
-  for (const run of runs) {
+  for (const row of runs) {
+    let run = row;
+    if (run.service_key === "meta_ad_library_scraper") {
+      run = mergeMetaScrapeIntoRun(run, scrapeByRunId.get(run.id));
+    }
     if (!run.brand_id || !run.service_key) continue;
     const key = `${run.brand_id}:${run.service_key}`;
     if (seen.has(key)) continue;
@@ -143,6 +200,8 @@ function attachLatestRuns(brands, runs) {
     if (!brand) continue;
 
     brand.runs[run.service_key] = {
+      id: run.id,
+      service_run_id: run.id,
       status: run.status || "not_run",
       started_at: run.started_at || run.created_at,
       finished_at: run.finished_at,
@@ -176,7 +235,20 @@ export async function loadDashboardBrands({ limit = 500 } = {}) {
   });
   const runRows = await supabaseRest("service_runs", runParams);
 
-  return attachLatestRuns(brands, runRows);
+  let metaScrapeRows = [];
+  try {
+    const scrapeParams = new URLSearchParams({
+      select: META_SCRAPE_FIELDS,
+      brand_id: `in.(${ids})`,
+      order: "created_at.desc.nullslast",
+      limit: "2000",
+    });
+    metaScrapeRows = await supabaseRest("meta_ad_scrapes", scrapeParams);
+  } catch (error) {
+    console.warn("No se pudo leer meta_ad_scrapes para enriquecer el resumen Meta Ads", error);
+  }
+
+  return attachLatestRuns(brands, runRows, metaScrapeRows);
 }
 
 export async function loadMetaAds(brandId) {

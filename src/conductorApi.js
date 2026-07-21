@@ -25,14 +25,13 @@ function normalizeErrorPayload(payload, fallback) {
   return fallback;
 }
 
-async function conductorPost(path, body) {
+async function conductorRequest(path, options = {}) {
   const response = await fetch(`${conductorBaseUrl()}${path}`, {
-    method: "POST",
     headers: {
-      "Content-Type": "application/json",
       Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
     },
-    body: JSON.stringify(body),
+    ...options,
   });
 
   const text = await response.text();
@@ -53,6 +52,17 @@ async function conductorPost(path, body) {
   return payload;
 }
 
+async function conductorPost(path, body) {
+  return conductorRequest(path, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+async function conductorGet(path) {
+  return conductorRequest(path, { method: "GET" });
+}
+
 export async function runConductorService(brandId, serviceKey) {
   const endpoint = CONDUCTOR_ENDPOINTS[serviceKey];
   if (!endpoint) {
@@ -64,4 +74,9 @@ export async function runConductorService(brandId, serviceKey) {
 
 export async function runConductorPipeline(brandId) {
   return conductorPost("/microservices/run-all", { supabase_id: brandId });
+}
+
+export async function getMetaAdLibraryRun(serviceRunId) {
+  if (!serviceRunId) throw new Error("Falta service_run_id para consultar Meta Ads.");
+  return conductorGet(`/microservices/meta-ad-library/runs/${encodeURIComponent(serviceRunId)}`);
 }
