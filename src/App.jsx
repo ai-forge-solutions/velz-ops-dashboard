@@ -7,6 +7,7 @@ import {
 import { loadDashboardBrands } from "./supabaseData";
 import {
   conductorServiceAvailable,
+  getMetaAdLibraryRun,
   runConductorPipeline,
   runConductorService,
 } from "./conductorApi";
@@ -17,8 +18,11 @@ import BrandDrawer from "./BrandDrawer";
 // no orchestrator endpoint yet (per project notes) but are wired into the UI
 // so triggering them is a no-op until the real service exists.
 // ---------------------------------------------------------------------------
+const META_ADS_SERVICE_KEY = "meta_ad_library_scraper";
+const META_ADS_POLL_INTERVAL_MS = 15_000;
+
 const SERVICES = [
-  { key: "meta_ad_library_scraper", label: "Meta Ads", deployed: true },
+  { key: META_ADS_SERVICE_KEY, label: "Meta Ads", deployed: true },
   { key: "brand_reviews", label: "Reviews", deployed: true },
   { key: "web_stack_wappalyzer", label: "Tech Stack", deployed: true },
   { key: "shopify_signals", label: "Shopify Signals", deployed: true },
@@ -103,6 +107,30 @@ function StatusLabel({ status }) {
   return map[status];
 }
 
+function statusFromConductorResult(result) {
+  if (result?.status === "accepted") return "running";
+  if (result?.status === "fail") return "error";
+  if (result?.status) return result.status;
+  return result?.success ? "success" : "error";
+}
+
+function activeMetaAdRunIds(brands) {
+  return brands
+    .map((brand) => brand.runs?.[META_ADS_SERVICE_KEY])
+    .filter((run) => run?.service_run_id && ["queued", "running"].includes(run.status))
+    .map((run) => run.service_run_id);
+}
+
+function runSummaryChunks(run) {
+  const summary = run?.response_payload?.summary;
+  if (!summary || typeof summary !== "object") return [];
+  return [
+    summary.ad_count != null ? `ad_count: ${summary.ad_count}` : null,
+    summary.stop_reason ? `stop_reason: ${summary.stop_reason}` : null,
+    summary.targeting?.view_all_page_id ? `view_all_page_id: ${summary.targeting.view_all_page_id}` : null,
+  ].filter(Boolean);
+}
+
 // ---------------------------------------------------------------------------
 export default function App() {
   const [tab, setTab] = useState("runs");
@@ -118,6 +146,7 @@ export default function App() {
   const popRef = useRef(null);
 
   const [actionMessage, setActionMessage] = useState(null);
+  const activeMetaRunSignature = activeMetaAdRunIds(brands).join("|");
 
   async function refreshDashboardBrands({ showLoading = false } = {}) {
     if (showLoading) setLoadingBrands(true);
@@ -157,15 +186,17 @@ export default function App() {
   }
 
   function markServiceFinished(brandId, serviceKey, result, fallbackMessage) {
-    const success = Boolean(result?.success);
+    const nextStatus = statusFromConductorResult(result);
+    const accepted = nextStatus === "running";
+    const success = nextStatus === "success";
     updateRun(brandId, serviceKey, {
-      status: success ? "success" : "error",
+      status: nextStatus,
       service_run_id: result?.service_run_id,
       message: result?.message || fallbackMessage,
     });
     setActionMessage({
-      tone: success ? "success" : "error",
-      text: `${serviceKey}: ${result?.message || fallbackMessage}`,
+      tone: success ? "success" : accepted ? "warning" : "error",
+      text: `${serviceKey}: ${result?.message || fallbackMessage}${result?.service_run_id ? ` · service_run_id ${result.service_run_id}` : ""}`,
     });
   }
 
@@ -210,6 +241,30 @@ export default function App() {
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
+
+  useEffect(() => {
+    const runIds = activeMetaAdRunIds(brands);
+    if (runIds.length === 0) return undefined;
+
+    let cancelled = false;
+    async function pollMetaRuns() {
+      try {
+        await Promise.all(runIds.map((runId) => getMetaAdLibraryRun(runId).catch((error) => ({ error, runId }))));
+        if (!cancelled) await refreshDashboardBrands();
+      } catch (error) {
+        if (!cancelled) {
+          setActionMessage({ tone: "error", text: `No se pudo refrescar el run async de Meta Ads: ${error.message}` });
+        }
+      }
+    }
+
+    pollMetaRuns();
+    const timer = window.setInterval(pollMetaRuns, META_ADS_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeMetaRunSignature]);
 
   // -- Real conductor calls --------------------------------------------------
   async function triggerService(brandId, serviceKey) {
@@ -470,7 +525,7 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
 
       <div className="mt-3 text-[11px] flex items-start gap-1.5" style={{ color: COLORS.muted }}>
         <Info size={13} className="mt-0.5 shrink-0" />
-        <span>Marcas y estado leídos en vivo desde Supabase <span className="mono">velz-outreach</span>. “Ejecutar ahora”, Pipeline y cascadas llaman al conductor configurado en <span className="mono">VITE_CONDUCTOR_BASE_URL</span>; al terminar se refrescan las ejecuciones persistidas.</span>
+        <span>Marcas y estado leídos en vivo desde Supabase <span className="mono">velz-outreach</span>. “Ejecutar ahora”, Pipeline y cascadas llaman al conductor configurado en <span className="mono">VITE_CONDUCTOR_BASE_URL</span>; Meta Ads arranca como job async, guarda <span className="mono">service_run_id</span> y se refresca con polling corto sin mantener una request larga abierta.</span>
       </div>
     </div>
   );
@@ -533,6 +588,16 @@ function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
           Inicio: {fmtTime(run.started_at)} · Duración: {fmtDuration(run.duration_ms)}
         </div>
       )}
+      {run?.service_run_id && (
+        <div className="mono text-[10px] mb-1 break-all" style={{ color: COLORS.muted }}>
+          service_run_id: {run.service_run_id}
+        </div>
+      )}
+      {runSummaryChunks(run).map((chunk) => (
+        <div key={chunk} className="mono text-[10px] mb-1" style={{ color: COLORS.muted }}>
+          {chunk}
+        </div>
+      ))}
       {run?.message && (
         <div className="text-[10px] mb-2" style={{ color: status === "error" ? COLORS.red : COLORS.muted }}>
           {run.message}
