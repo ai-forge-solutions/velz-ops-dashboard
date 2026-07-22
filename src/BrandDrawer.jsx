@@ -303,7 +303,7 @@ function MetaAdsDetail({ ads, fullscreen }) {
         </select>
       </div>
       {visible.length === 0 ? <EmptyState>No hay anuncios para este filtro.</EmptyState> : (
-        <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
+        <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))] sm:[grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
           {visible.map((ad, index) => (
             <article key={`${ad.title}-${index}`} className="rounded-lg p-3 text-xs" style={{ border: `1px solid ${COLORS.line}` }}>
               <div className="flex items-start justify-between gap-3">
@@ -389,7 +389,7 @@ function ReviewsDetail({ reviews, fullscreen }) {
           {groups.map((group) => <ReviewCountryGroup key={group.country} group={group} />)}
         </div>
       ) : (
-        <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
+        <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))] sm:[grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
           {visible.map((review, index) => <ReviewCard key={`${review.author}-${index}`} review={review} />)}
         </div>
       )}
@@ -456,7 +456,7 @@ function TechStackDetail({ stack, fullscreen }) {
           <Meta label="Fecha de análisis" value={fmtTime(analysis?.analyzed_at || analysis?.created_at)} />
         </dl>
       </section>
-      <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
+      <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))] sm:[grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
         {detections.map((detection, index) => {
           const evidence = Array.isArray(detection.evidence) ? detection.evidence : [];
           return (
@@ -558,12 +558,12 @@ export default function BrandDrawer({ brand, onClose }) {
   if (!brand) return null;
 
   const hasRuns = runnableServices.length > 0;
-  const width = fullscreen ? "100vw" : 640;
+  const width = fullscreen ? "100vw" : undefined;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/20" aria-modal="true" role="dialog">
-      <aside className="h-full overflow-y-auto shadow-2xl transition-all" style={{ width, maxWidth: "100vw", background: COLORS.paper, color: COLORS.ink }}>
-        <header className="sticky top-0 z-10 flex items-start justify-between gap-4 px-6 py-4" style={{ borderBottom: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
+      <aside className="h-full w-full overflow-y-auto shadow-2xl transition-all sm:w-[640px]" style={{ width, maxWidth: "100vw", background: COLORS.paper, color: COLORS.ink }}>
+        <header className="sticky top-0 z-10 flex items-start justify-between gap-3 px-4 py-4 sm:gap-4 sm:px-6" style={{ borderBottom: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em]" style={{ color: COLORS.muted }}>Verificación de marca</p>
             <h1 className="mt-1 text-xl font-medium">{brand.name}</h1>
@@ -579,7 +579,7 @@ export default function BrandDrawer({ brand, onClose }) {
           </div>
         </header>
 
-        <main className="p-6">
+        <main className="p-4 sm:p-6">
           {!hasRuns ? (
             <div className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: COLORS.wash }}>
               <p className="mb-4 text-sm">Aún no se ha ejecutado ningún servicio para esta marca. Estas fuentes siguen pendientes:</p>
@@ -595,7 +595,7 @@ export default function BrandDrawer({ brand, onClose }) {
           ) : detailSource ? (
             <DetailPane brand={brand} source={detailSource} state={sources[detailSource] || { loading: true }} fullscreen={fullscreen} onBack={() => setDetailSource(null)} />
           ) : (
-            <div className={fullscreen ? "grid grid-cols-2 gap-4" : "space-y-4"}>
+            <div className={fullscreen ? "grid grid-cols-1 gap-4 sm:grid-cols-2" : "space-y-4"}>
               {runnableServices.map((service) => (
                 <SourceCard
                   key={service.source}
