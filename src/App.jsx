@@ -360,17 +360,17 @@ export default function App() {
       `}</style>
 
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: `1px solid ${COLORS.line}` }}>
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6" style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+        <div className="flex min-w-0 items-center gap-3">
           <svg width="22" height="18" viewBox="0 0 22 18">
             <line x1="0" y1="12" x2="22" y2="12" stroke={COLORS.ink} strokeWidth="1.3" />
             <line x1="11" y1="0" x2="11" y2="18" stroke={COLORS.ink} strokeWidth="1.3" />
             <circle cx="11" cy="12" r="3" fill={COLORS.ink} />
           </svg>
           <span className="display text-2xl tracking-wide lowercase">velz</span>
-          <span className="text-xs uppercase tracking-widest mt-1" style={{ color: COLORS.muted }}>outreach ops</span>
+          <span className="mt-1 truncate text-xs uppercase tracking-widest" style={{ color: COLORS.muted }}>outreach ops</span>
         </div>
-        <div className="flex gap-1 rounded-full p-1" style={{ background: "#F4F3EF" }}>
+        <div className="grid grid-cols-2 gap-1 rounded-full p-1 sm:flex" style={{ background: "#F4F3EF" }}>
           {["runs", "cascades"].map(t => (
             <button key={t} onClick={() => setTab(t)}
               className="px-4 py-1.5 rounded-full text-xs font-medium transition-colors"
@@ -406,22 +406,22 @@ export default function App() {
 // ---------------------------------------------------------------------------
 function RunsView({ brands, search, setSearch, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer }) {
   return (
-    <div className="px-6 py-5">
+    <div className="px-4 py-4 sm:px-6 sm:py-5">
       {/* Toolbar */}
-      <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-md" style={{ border: `1px solid ${COLORS.line}` }}>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-4">
+        <div className="flex w-full items-center gap-2 rounded-md px-3 py-2 sm:w-auto sm:py-1.5" style={{ border: `1px solid ${COLORS.line}` }}>
           <Search size={14} color={COLORS.muted} />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Buscar marca o dominio…"
-            className="outline-none text-xs w-56 bg-transparent" />
+            className="w-full bg-transparent text-sm outline-none sm:w-56 sm:text-xs" />
         </div>
         {selected.size > 0 && (
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
             <span style={{ color: COLORS.muted }}>{selected.size} seleccionadas</span>
             <BulkTrigger onTrigger={triggerBulk} />
           </div>
         )}
-        <div className="flex items-center gap-3 text-xs ml-auto" style={{ color: COLORS.muted }}>
+        <div className="flex items-center gap-3 text-xs sm:ml-auto" style={{ color: COLORS.muted }}>
           <Legend />
         </div>
       </div>
@@ -441,8 +441,8 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
       )}
 
       {/* Table */}
-      <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${COLORS.line}` }}>
-        <table className="w-full text-xs">
+      <div className="hidden overflow-x-auto rounded-md sm:block" style={{ border: `1px solid ${COLORS.line}` }}>
+        <table className="w-full min-w-[980px] text-xs">
           <thead>
             <tr style={{ background: "#FAFAF8", borderBottom: `1px solid ${COLORS.line}` }}>
               <th className="w-8 py-2.5"></th>
@@ -523,11 +523,103 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
         </table>
       </div>
 
-      <div className="mt-3 text-[11px] flex items-start gap-1.5" style={{ color: COLORS.muted }}>
+      <div className="space-y-3 sm:hidden">
+        {loading && (
+          <div className="rounded-md px-4 py-8 text-center text-xs" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.muted }}>
+            <span className="inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Cargando datos reales desde Supabase…</span>
+          </div>
+        )}
+        {!loading && error && (
+          <div className="rounded-md px-4 py-8 text-center text-xs" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.red }}>
+            No se pudieron leer los datos reales de Supabase: {error.message}
+          </div>
+        )}
+        {!loading && !error && brands.length === 0 && (
+          <div className="rounded-md px-4 py-8 text-center text-xs" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.muted }}>
+            No hay marcas en Supabase para mostrar.
+          </div>
+        )}
+        {!loading && !error && brands.map((brand) => (
+          <MobileBrandCard
+            key={brand.id}
+            brand={brand}
+            selected={selected.has(brand.id)}
+            toggleRow={toggleRow}
+            triggerService={triggerService}
+            triggerPipeline={triggerPipeline}
+            popover={popover}
+            setPopover={setPopover}
+            popRef={popRef}
+            openBrandDrawer={openBrandDrawer}
+          />
+        ))}
+      </div>
+
+      <div className="mt-3 flex items-start gap-1.5 text-[11px]" style={{ color: COLORS.muted }}>
         <Info size={13} className="mt-0.5 shrink-0" />
         <span>Marcas y estado leídos en vivo desde Supabase <span className="mono">velz-outreach</span>. “Ejecutar ahora”, Pipeline y cascadas llaman al conductor configurado en <span className="mono">VITE_CONDUCTOR_BASE_URL</span>; Meta Ads arranca como job async, guarda <span className="mono">service_run_id</span> y se refresca con polling corto sin mantener una request larga abierta.</span>
       </div>
     </div>
+  );
+}
+
+function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPipeline, popover, setPopover, popRef, openBrandDrawer }) {
+  const mobilePopoverService = SERVICES.find((service) => popover?.brandId === brand.id && popover?.serviceKey === service.key);
+
+  return (
+    <article className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: selected ? "#F6F8F6" : COLORS.paper }}>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <label className="mt-1 flex shrink-0 items-center gap-2 text-xs" style={{ color: COLORS.muted }}>
+          <input type="checkbox" checked={selected} onChange={() => toggleRow(brand.id)} />
+          Sel.
+        </label>
+        <button type="button" onClick={() => openBrandDrawer(brand)} className="min-w-0 flex-1 text-left" title="Abrir panel de verificación de marca">
+          <div className="truncate font-medium underline-offset-2 hover:underline">{brand.name}</div>
+          <div className="mono truncate text-[11px]" style={{ color: COLORS.muted }}>{brand.domain}</div>
+        </button>
+        <div className="shrink-0 text-right mono text-[11px]">
+          <div style={{ color: COLORS.muted }}>Revenue/mes</div>
+          <div>{fmtMoney(brand.revenue)}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {SERVICES.map((service) => {
+          const status = statusOf(brand, service.key);
+          return (
+            <div key={service.key} className="relative">
+              <button
+                type="button"
+                onClick={() => setPopover((current) => current?.brandId === brand.id && current?.serviceKey === service.key ? null : { brandId: brand.id, serviceKey: service.key })}
+                className="flex min-h-[70px] w-full flex-col items-center justify-center gap-1 rounded-md px-2 py-2 text-center"
+                style={{ border: `1px solid ${COLORS.line}`, color: service.deployed ? COLORS.ink : COLORS.muted, background: "#FAFAF8" }}
+              >
+                <StatusDot status={status} />
+                <span className="text-[11px] leading-tight">{service.label}</span>
+                {!service.deployed && <span className="text-[9px] leading-none" style={{ color: COLORS.muted }}>no desplegado</span>}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {mobilePopoverService && (
+        <div ref={popRef} className="mt-2">
+          <CellPopoverImpl
+            brand={brand}
+            service={mobilePopoverService}
+            onTrigger={() => { triggerService(brand.id, mobilePopoverService.key); }}
+            onClose={() => setPopover(null)}
+          />
+        </div>
+      )}
+
+      <button onClick={() => triggerPipeline(brand.id)}
+        className="mt-3 flex w-full items-center justify-center gap-1 rounded px-3 py-2 text-xs font-medium"
+        style={{ border: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
+        <Play size={12} /> Ejecutar pipeline
+      </button>
+    </article>
   );
 }
 
@@ -537,7 +629,7 @@ function Legend() {
     { s: "partial", l: "Parcial" }, { s: "running", l: "Ejecutando" }, { s: "not_run", l: "Sin ejecutar" },
   ];
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:min-w-max sm:flex-nowrap">
       {items.map(it => (
         <div key={it.s} className="flex items-center gap-1">
           <div style={{ transform: "scale(0.6)" }}><StatusDot status={it.s} /></div>
@@ -576,11 +668,11 @@ function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
   const run = brand.runs[service.key];
   const status = run?.status || "not_run";
   return (
-    <div className="absolute z-30 top-8 left-1/2 -translate-x-1/2 w-56 rounded-md p-3 text-left"
+    <div className="z-30 w-full min-w-56 rounded-md p-3 text-left sm:absolute sm:left-1/2 sm:top-8 sm:w-56 sm:-translate-x-1/2"
       style={{ background: "#fff", border: `1px solid ${COLORS.line}`, boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}>
       <div className="flex items-center justify-between mb-2">
         <span className="font-medium text-[11px]">{service.label}</span>
-        <StatusDot status={status} />
+        <div className="w-10 shrink-0"><StatusDot status={status} /></div>
       </div>
       <div className="text-[11px] mb-2" style={{ color: COLORS.muted }}><StatusLabel status={status} /></div>
       {run?.started_at && (
@@ -667,7 +759,7 @@ function CascadesView({ brands, selected, cascades, setCascades, triggerService 
   const availableToAdd = SERVICES.filter(s => s.deployed && !steps.some(st => st.key === s.key));
 
   return (
-    <div className="px-6 py-5 grid grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 gap-5 px-4 py-4 sm:grid-cols-2 sm:gap-6 sm:px-6 sm:py-5">
       {/* Builder */}
       <div className="rounded-md p-4" style={{ border: `1px solid ${COLORS.line}` }}>
         <h3 className="font-medium mb-3">Nueva cascada</h3>
@@ -734,10 +826,10 @@ function CascadesView({ brands, selected, cascades, setCascades, triggerService 
         )}
 
         <label className="block text-[11px] mb-1" style={{ color: COLORS.muted }}>Programación</label>
-        <div className="flex items-center gap-3 mb-2">
+        <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-center">
           <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)}
             className="px-2 py-1.5 rounded text-xs mono" style={{ border: `1px solid ${COLORS.line}` }} />
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {WEEKDAYS.map((d, i) => (
               <button key={i} onClick={() => toggleDay(i)}
                 className="w-6 h-6 rounded-full text-[10px] font-medium"
