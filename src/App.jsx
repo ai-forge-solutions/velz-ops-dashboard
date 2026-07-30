@@ -12,6 +12,7 @@ import {
   runConductorService,
 } from "./conductorApi";
 import BrandDrawer from "./BrandDrawer";
+import { deriveOutreachFilters } from "./outreachStatus";
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
 // in the velz-outreach Supabase project. Services marked deployed:false have
@@ -105,6 +106,35 @@ function StatusLabel({ status }) {
     success: "Éxito", partial: "Parcial", error: "Error", skipped: "Omitido",
   };
   return map[status];
+}
+
+function OutreachBadge({ value, tone = "muted" }) {
+  const color = tone === "green" ? COLORS.green : tone === "amber" ? COLORS.amber : tone === "red" ? COLORS.red : COLORS.muted;
+  return (
+    <span className="inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium" style={{ color, background: `${color}14`, border: `1px solid ${color}33` }}>
+      {value || "—"}
+    </span>
+  );
+}
+
+function outreachTone(outreach) {
+  if (!outreach) return "muted";
+  if (outreach.lifecycle?.key === "suppressed" || outreach.lifecycle?.key === "failed" || outreach.readiness?.key === "blocked") return "red";
+  if (outreach.readiness?.key === "pending_review" || outreach.lifecycle?.key === "import_pending") return "amber";
+  if (["approved", "sent", "opened", "clicked"].includes(outreach.readiness?.key) || ["sent", "opened", "clicked"].includes(outreach.lifecycle?.key)) return "green";
+  return "muted";
+}
+
+function OutreachStatusCell({ outreach, error }) {
+  if (error) return <OutreachBadge value="Read blocked" tone="amber" />;
+  if (!outreach) return <OutreachBadge value="No lead" />;
+  const tone = outreachTone(outreach);
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <OutreachBadge value={outreach.readiness?.label} tone={tone} />
+      <OutreachBadge value={outreach.lifecycle?.label} tone={tone} />
+    </div>
+  );
 }
 
 function statusFromConductorResult(result) {
@@ -370,12 +400,12 @@ export default function App() {
           <span className="display text-2xl tracking-wide lowercase">velz</span>
           <span className="mt-1 truncate text-xs uppercase tracking-widest" style={{ color: COLORS.muted }}>outreach ops</span>
         </div>
-        <div className="grid grid-cols-2 gap-1 rounded-full p-1 sm:flex" style={{ background: "#F4F3EF" }}>
-          {["runs", "cascades"].map(t => (
+        <div className="grid grid-cols-3 gap-1 rounded-full p-1 sm:flex" style={{ background: "#F4F3EF" }}>
+          {["runs", "outreach", "cascades"].map(t => (
             <button key={t} onClick={() => setTab(t)}
               className="px-4 py-1.5 rounded-full text-xs font-medium transition-colors"
               style={{ background: tab === t ? COLORS.ink : "transparent", color: tab === t ? "#fff" : COLORS.ink }}>
-              {t === "runs" ? "Ejecuciones" : "Cascadas"}
+              {t === "runs" ? "Ejecuciones" : t === "outreach" ? "Outreach" : "Cascadas"}
             </button>
           ))}
         </div>
@@ -391,6 +421,8 @@ export default function App() {
           popover={popover} setPopover={setPopover} popRef={popRef}
           openBrandDrawer={setDrawerBrand}
         />
+      ) : tab === "outreach" ? (
+        <OutreachView brands={filtered} loading={loadingBrands} error={loadError} openBrandDrawer={setDrawerBrand} />
       ) : (
         <CascadesView
           brands={brands} selected={selected} cascades={cascades} setCascades={setCascades}
@@ -398,7 +430,14 @@ export default function App() {
         />
       )}
 
-      <BrandDrawer brand={drawerBrand} onClose={() => setDrawerBrand(null)} />
+      <BrandDrawer
+        brand={drawerBrand}
+        onClose={() => setDrawerBrand(null)}
+        onRefresh={async () => {
+          const rows = await refreshDashboardBrands();
+          setDrawerBrand((current) => current ? rows.find((brand) => brand.id === current.id) || current : current);
+        }}
+      />
     </div>
   );
 }
@@ -448,6 +487,7 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
               <th className="w-8 py-2.5"></th>
               <th className="text-left px-3 py-2.5 font-medium" style={{ color: COLORS.muted }}>Marca</th>
               <th className="text-right px-3 py-2.5 font-medium mono" style={{ color: COLORS.muted }}>Revenue/mes</th>
+              <th className="text-left px-3 py-2.5 font-medium" style={{ color: COLORS.muted }}>Outreach</th>
               {SERVICES.map(s => (
                 <th key={s.key} className="px-2 py-2.5 font-medium text-center" style={{ color: s.deployed ? COLORS.ink : COLORS.muted, minWidth: 88 }}>
                   <div className="flex flex-col items-center gap-0.5">
@@ -462,21 +502,21 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={SERVICES.length + 4} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>
+                <td colSpan={SERVICES.length + 5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>
                   <span className="inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Cargando datos reales desde Supabase…</span>
                 </td>
               </tr>
             )}
             {!loading && error && (
               <tr>
-                <td colSpan={SERVICES.length + 4} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>
+                <td colSpan={SERVICES.length + 5} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>
                   No se pudieron leer los datos reales de Supabase: {error.message}
                 </td>
               </tr>
             )}
             {!loading && !error && brands.length === 0 && (
               <tr>
-                <td colSpan={SERVICES.length + 4} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>
+                <td colSpan={SERVICES.length + 5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>
                   No hay marcas en Supabase para mostrar.
                 </td>
               </tr>
@@ -498,6 +538,7 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
                   </button>
                 </td>
                 <td className="px-3 py-2.5 text-right mono">{fmtMoney(b.revenue)}</td>
+                <td className="px-3 py-2.5"><OutreachStatusCell outreach={b.outreach} error={b.outreachLoadError} /></td>
                 {SERVICES.map(s => (
                   <td key={s.key} className="px-2 py-1.5 relative">
                     <button className="w-full" onClick={() => setPopover(p => p?.brandId === b.id && p?.serviceKey === s.key ? null : { brandId: b.id, serviceKey: s.key })}>
@@ -581,6 +622,11 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
           <div style={{ color: COLORS.muted }}>Revenue/mes</div>
           <div>{fmtMoney(brand.revenue)}</div>
         </div>
+      </div>
+
+      <div className="mb-3 rounded-md px-3 py-2" style={{ background: "#FAFAF8", border: `1px solid ${COLORS.line}` }}>
+        <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: COLORS.muted }}>Outreach</div>
+        <OutreachStatusCell outreach={brand.outreach} error={brand.outreachLoadError} />
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -709,6 +755,78 @@ function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
     </div>
   );
 }
+// ---------------------------------------------------------------------------
+const OUTREACH_FILTERS = [
+  { key: "all", label: "Todos" },
+  { key: "needs_review", label: "Needs review" },
+  { key: "ready_to_launch", label: "Ready to launch" },
+  { key: "launched", label: "Launched" },
+  { key: "provider_pending", label: "Provider pending" },
+  { key: "engaged", label: "Engaged" },
+  { key: "failed_blocked", label: "Failed / blocked" },
+  { key: "suppressed", label: "Suppressed" },
+];
+
+function OutreachView({ brands, loading, error, openBrandDrawer }) {
+  const [filter, setFilter] = useState("all");
+  const rows = brands.filter((brand) => filter === "all" || deriveOutreachFilters(brand.outreach).includes(filter));
+
+  return (
+    <div className="px-4 py-4 sm:px-6 sm:py-5">
+      <div className="mb-4 flex flex-wrap gap-2 text-xs">
+        {OUTREACH_FILTERS.map((item) => (
+          <button key={item.key} onClick={() => setFilter(item.key)} className="rounded-full px-3 py-1 font-medium" style={{ background: filter === item.key ? COLORS.ink : COLORS.soft, color: filter === item.key ? "#fff" : COLORS.ink }}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${COLORS.line}` }}>
+        <table className="w-full min-w-[900px] text-xs">
+          <thead>
+            <tr style={{ background: "#FAFAF8", borderBottom: `1px solid ${COLORS.line}` }}>
+              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Marca / lead</th>
+              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Readiness</th>
+              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Lifecycle</th>
+              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Provider / engagement</th>
+              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Next action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}><Loader2 size={14} className="mr-2 inline animate-spin" /> Cargando Outreach desde Supabase…</td></tr>}
+            {!loading && error && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>No se pudieron leer marcas: {error.message}</td></tr>}
+            {!loading && !error && rows.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>No hay leads para este filtro.</td></tr>}
+            {!loading && !error && rows.map((brand) => {
+              const outreach = brand.outreach;
+              const tone = outreachTone(outreach);
+              return (
+                <tr key={brand.id} style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+                  <td className="px-3 py-3 align-top">
+                    <button onClick={() => openBrandDrawer(brand)} className="text-left underline-offset-2 hover:underline">
+                      <div className="font-medium">{brand.name}</div>
+                      <div className="mono text-[11px]" style={{ color: COLORS.muted }}>{outreach?.leadId || "sin lead"} · {outreach?.email || brand.domain}</div>
+                    </button>
+                  </td>
+                  <td className="px-3 py-3 align-top"><OutreachBadge value={outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "No sequence")} tone={brand.outreachLoadError ? "amber" : tone} /></td>
+                  <td className="px-3 py-3 align-top"><OutreachBadge value={outreach?.lifecycle?.label || "Not launched"} tone={tone} /></td>
+                  <td className="px-3 py-3 align-top mono text-[11px]" style={{ color: COLORS.muted }}>
+                    <div>sequence: {outreach?.provider?.provider_sequence_id || "—"}</div>
+                    <div>import: {outreach?.provider?.provider_import_status || outreach?.provider?.provider_import_request_id || "—"}</div>
+                    <div>events: {Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}:${count}`).join(" · ") || "—"}</div>
+                    <div>tool: {Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}:${count}`).join(" · ") || "—"}</div>
+                  </td>
+                  <td className="px-3 py-3 align-top" style={{ color: outreach?.blockers?.length ? COLORS.red : COLORS.ink }}>
+                    {brand.outreachLoadError ? `Supabase read blocked: ${brand.outreachLoadError.message}` : outreach?.nextAction?.label || "No outreach data"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 function CascadesView({ brands, selected, cascades, setCascades, triggerService }) {
   const [name, setName] = useState("");

@@ -1,3 +1,5 @@
+import { deriveOutreachStatus, QA_LEAD_ID } from "./outreachStatus";
+
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -78,6 +80,8 @@ const CONTEXT_FIELDS = [
   "response_markdown",
   "created_at",
 ].join(",");
+
+const OUTREACH_LIMIT = "2000";
 
 function requireSupabaseConfig() {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
@@ -215,6 +219,109 @@ function attachLatestRuns(brands, runs, metaScrapes = []) {
   return Array.from(byBrand.values());
 }
 
+function groupBy(rows, key) {
+  const grouped = new Map();
+  for (const row of rows || []) {
+    const value = row?.[key];
+    if (!value) continue;
+    if (!grouped.has(value)) grouped.set(value, []);
+    grouped.get(value).push(row);
+  }
+  return grouped;
+}
+
+function latestOutreachRow(rows = []) {
+  return rows.filter(Boolean).reduce((latest, row) => {
+    if (!latest) return row;
+    const left = new Date(latest.updated_at || latest.created_at || latest.sent_at || latest.last_provider_sync_at || 0).getTime();
+    const right = new Date(row.updated_at || row.created_at || row.sent_at || row.last_provider_sync_at || 0).getTime();
+    return right >= left ? row : latest;
+  }, null);
+}
+
+function activeSuppressionForEmail(suppressionsByEmail, email) {
+  if (!email) return null;
+  const rows = suppressionsByEmail.get(String(email).toLowerCase()) || [];
+  return latestOutreachRow(rows.filter((row) => row.active !== false));
+}
+
+function idsForInFilter(ids) {
+  return Array.from(new Set(ids.filter(Boolean))).join(",");
+}
+
+async function loadOutreachForBrands(brands) {
+  if (brands.length === 0) return new Map();
+  const brandIds = idsForInFilter(brands.map((brand) => brand.id));
+  const leadParams = new URLSearchParams({
+    select: "*",
+    brand_id: `in.(${brandIds})`,
+    limit: OUTREACH_LIMIT,
+  });
+  const leads = await supabaseRest("v_lead_overview", leadParams);
+  const normalizedLeads = leads.map((lead) => ({ ...lead, lead_id: lead.lead_id || lead.id }));
+  const leadIds = idsForInFilter(normalizedLeads.map((lead) => lead.lead_id));
+  if (!leadIds) return new Map();
+
+  const sequenceParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "updated_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
+  const sendParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "updated_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
+  const eventParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "event_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
+  const magnetParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "event_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
+
+  const [sequences, sends, events, magnetEvents] = await Promise.all([
+    supabaseRest("email_sequences", sequenceParams),
+    supabaseRest("email_sends", sendParams),
+    supabaseRest("email_events", eventParams),
+    supabaseRest("lead_magnet_events", magnetParams),
+  ]);
+
+  let suppressions = [];
+  const emails = normalizedLeads.map((lead) => lead.primary_email || lead.email).filter(Boolean).map((email) => `"${String(email).toLowerCase()}"`);
+  if (emails.length > 0) {
+    const suppressionParams = new URLSearchParams({
+      select: "*",
+      email: `in.(${idsForInFilter(emails)})`,
+      order: "updated_at.desc.nullslast,created_at.desc.nullslast",
+      limit: OUTREACH_LIMIT,
+    });
+    suppressions = await supabaseRest("email_suppression_entries", suppressionParams);
+  }
+
+  const leadsByBrand = groupBy(normalizedLeads, "brand_id");
+  const sequencesByLead = groupBy(sequences, "lead_id");
+  const sendsByLead = groupBy(sends, "lead_id");
+  const eventsByLead = groupBy(events, "lead_id");
+  const magnetEventsByLead = groupBy(magnetEvents, "lead_id");
+  const suppressionsByEmail = groupBy(suppressions.map((row) => ({ ...row, email: String(row.email || row.recipient_email || "").toLowerCase() })), "email");
+
+  return new Map(brands.map((brand) => {
+    const brandLeads = leadsByBrand.get(brand.id) || [];
+    const lead = brandLeads.find((item) => item.lead_id === QA_LEAD_ID) || brandLeads[0] || null;
+    if (!lead) return [brand.id, null];
+    const sequence = latestOutreachRow(sequencesByLead.get(lead.lead_id) || []);
+    const sendRows = sendsByLead.get(lead.lead_id) || [];
+    const send = latestOutreachRow(sequence?.id ? sendRows.filter((row) => row.email_sequence_id === sequence.id) : sendRows);
+    const email = lead.primary_email || lead.email;
+    return [brand.id, deriveOutreachStatus({
+      leadId: lead.lead_id,
+      lead,
+      sequence,
+      send,
+      events: eventsByLead.get(lead.lead_id) || [],
+      magnetEvents: magnetEventsByLead.get(lead.lead_id) || [],
+      suppression: activeSuppressionForEmail(suppressionsByEmail, email),
+      launchConfigured: Boolean(import.meta.env.VITE_OUTREACH_ORCHESTRATION_BASE_URL),
+    })];
+  }));
+}
+
+function attachOutreach(brands, outreachByBrand, error = null) {
+  return brands.map((brand) => ({
+    ...brand,
+    outreach: outreachByBrand?.get(brand.id) || null,
+    outreachLoadError: error,
+  }));
+}
+
 export async function loadDashboardBrands({ limit = 500 } = {}) {
   const brandParams = new URLSearchParams({
     select: BRAND_FIELDS,
@@ -248,7 +355,19 @@ export async function loadDashboardBrands({ limit = 500 } = {}) {
     console.warn("No se pudo leer meta_ad_scrapes para enriquecer el resumen Meta Ads", error);
   }
 
-  return attachLatestRuns(brands, runRows, metaScrapeRows);
+  const withRuns = attachLatestRuns(brands, runRows, metaScrapeRows);
+  try {
+    const outreachByBrand = await loadOutreachForBrands(withRuns);
+    return attachOutreach(withRuns, outreachByBrand);
+  } catch (error) {
+    console.warn("No se pudo leer el estado Outreach desde Supabase; el dashboard de señales sigue disponible", error);
+    return attachOutreach(withRuns, new Map(), error);
+  }
+}
+
+export async function loadBrandOutreach(brandId) {
+  const brands = await loadDashboardBrands({ limit: 500 });
+  return brands.find((brand) => brand.id === brandId)?.outreach || null;
 }
 
 export async function loadMetaAds(brandId) {
