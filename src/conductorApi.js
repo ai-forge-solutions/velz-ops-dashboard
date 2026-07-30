@@ -1,5 +1,7 @@
 const DEFAULT_CONDUCTOR_BASE_URL =
   "https://velz-signals-conductor-stg.blackocean-de4b65c4.westeurope.azurecontainerapps.io";
+const OUTREACH_ORCHESTRATION_BASE_URL = import.meta.env.VITE_OUTREACH_ORCHESTRATION_BASE_URL;
+const SALES_HANDY_QA_LAUNCH_PATH = "/orchestration/saleshandy/bulks/qa-single-lead/launch";
 
 export const CONDUCTOR_ENDPOINTS = {
   meta_ad_library_scraper: "/microservices/meta-ad-library",
@@ -15,6 +17,10 @@ export function conductorServiceAvailable(serviceKey) {
 
 function conductorBaseUrl() {
   return (import.meta.env.VITE_CONDUCTOR_BASE_URL || DEFAULT_CONDUCTOR_BASE_URL).replace(/\/$/, "");
+}
+
+function outreachOrchestrationBaseUrl() {
+  return OUTREACH_ORCHESTRATION_BASE_URL?.replace(/\/$/, "") || null;
 }
 
 function normalizeErrorPayload(payload, fallback) {
@@ -79,4 +85,42 @@ export async function runConductorPipeline(brandId) {
 export async function getMetaAdLibraryRun(serviceRunId) {
   if (!serviceRunId) throw new Error("Falta service_run_id para consultar Meta Ads.");
   return conductorGet(`/microservices/meta-ad-library/runs/${encodeURIComponent(serviceRunId)}`);
+}
+
+export function saleshandyQaLaunchConfigured() {
+  return Boolean(outreachOrchestrationBaseUrl());
+}
+
+export async function launchSaleshandyQaBulk() {
+  const baseUrl = outreachOrchestrationBaseUrl();
+  if (!baseUrl) {
+    throw new Error("Falta configurar VITE_OUTREACH_ORCHESTRATION_BASE_URL para lanzar QA desde el dashboard.");
+  }
+
+  const response = await fetch(`${baseUrl}${SALES_HANDY_QA_LAUNCH_PATH}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      lead_id: "4768fa1e-21f7-4ff3-a82d-639deec5c4dd",
+      requested_by: "miguel",
+      allow_pending_review_for_qa: true,
+    }),
+  });
+
+  const text = await response.text();
+  let payload = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (error) {
+      payload = text;
+    }
+  }
+  if (!response.ok) {
+    throw new Error(normalizeErrorPayload(payload, `Orquestador Outreach respondió HTTP ${response.status}`));
+  }
+  return payload;
 }
