@@ -10,10 +10,17 @@ Panel operativo diario del pipeline de Velz Auto-Outreach: marcas (filas) × mic
 npm install
 cp .env.example .env.local
 # rellena VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY y VITE_CONDUCTOR_BASE_URL
+# opcional: VITE_OUTREACH_ORCHESTRATION_BASE_URL habilita el CTA QA Saleshandy
 npm run dev
 ```
 
 La app necesita una `anon key` de Supabase con políticas RLS de solo lectura para `brands` y `service_runs`. No uses la service-role key en Vite/Netlify: cualquier variable `VITE_*` se publica al navegador.
+
+## Outreach / Saleshandy QA
+
+El dashboard carga una segunda capa operativa de Outreach desde Supabase: `v_lead_overview`, `email_sequences`, `email_sends`, `email_events`, `lead_magnet_events` y `email_suppression_entries`. Si esas lecturas no están concedidas a anon, la matriz de señales sigue cargando y Outreach muestra `Read blocked`; ver `docs/SUPABASE_OUTREACH_READS.md` para el SQL mínimo de lectura.
+
+El botón `Launch Saleshandy QA bulk` solo se habilita para el lead QA hardcodeado `4768fa1e-21f7-4ff3-a82d-639deec5c4dd`, recipient `miguelcarmonar@gmail.com`, secuencia + tool URL presentes, sin suppression activa y con `VITE_OUTREACH_ORCHESTRATION_BASE_URL` configurado. La app llama únicamente al endpoint interno `/orchestration/saleshandy/bulks/qa-single-lead/launch`; no llama Saleshandy desde el navegador.
 
 ## Límite visual de Meta Ads
 

@@ -7,18 +7,23 @@ import {
 import { loadDashboardBrands } from "./supabaseData";
 import {
   conductorServiceAvailable,
+  getMetaAdLibraryRun,
   runConductorPipeline,
   runConductorService,
 } from "./conductorApi";
 import BrandDrawer from "./BrandDrawer";
+import { deriveOutreachFilters } from "./outreachStatus";
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
 // in the velz-outreach Supabase project. Services marked deployed:false have
 // no orchestrator endpoint yet (per project notes) but are wired into the UI
 // so triggering them is a no-op until the real service exists.
 // ---------------------------------------------------------------------------
+const META_ADS_SERVICE_KEY = "meta_ad_library_scraper";
+const META_ADS_POLL_INTERVAL_MS = 15_000;
+
 const SERVICES = [
-  { key: "meta_ad_library_scraper", label: "Meta Ads", deployed: true },
+  { key: META_ADS_SERVICE_KEY, label: "Meta Ads", deployed: true },
   { key: "brand_reviews", label: "Reviews", deployed: true },
   { key: "web_stack_wappalyzer", label: "Tech Stack", deployed: true },
   { key: "shopify_signals", label: "Shopify Signals", deployed: true },
@@ -103,6 +108,59 @@ function StatusLabel({ status }) {
   return map[status];
 }
 
+function OutreachBadge({ value, tone = "muted" }) {
+  const color = tone === "green" ? COLORS.green : tone === "amber" ? COLORS.amber : tone === "red" ? COLORS.red : COLORS.muted;
+  return (
+    <span className="inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium" style={{ color, background: `${color}14`, border: `1px solid ${color}33` }}>
+      {value || "—"}
+    </span>
+  );
+}
+
+function outreachTone(outreach) {
+  if (!outreach) return "muted";
+  if (outreach.lifecycle?.key === "suppressed" || outreach.lifecycle?.key === "failed" || outreach.readiness?.key === "blocked") return "red";
+  if (outreach.readiness?.key === "pending_review" || outreach.lifecycle?.key === "import_pending") return "amber";
+  if (["approved", "sent", "opened", "clicked"].includes(outreach.readiness?.key) || ["sent", "opened", "clicked"].includes(outreach.lifecycle?.key)) return "green";
+  return "muted";
+}
+
+function OutreachStatusCell({ outreach, error }) {
+  if (error) return <OutreachBadge value="Read blocked" tone="amber" />;
+  if (!outreach) return <OutreachBadge value="No lead" />;
+  const tone = outreachTone(outreach);
+  return (
+    <div className="flex flex-col items-start gap-1">
+      <OutreachBadge value={outreach.readiness?.label} tone={tone} />
+      <OutreachBadge value={outreach.lifecycle?.label} tone={tone} />
+    </div>
+  );
+}
+
+function statusFromConductorResult(result) {
+  if (result?.status === "accepted") return "running";
+  if (result?.status === "fail") return "error";
+  if (result?.status) return result.status;
+  return result?.success ? "success" : "error";
+}
+
+function activeMetaAdRunIds(brands) {
+  return brands
+    .map((brand) => brand.runs?.[META_ADS_SERVICE_KEY])
+    .filter((run) => run?.service_run_id && ["queued", "running"].includes(run.status))
+    .map((run) => run.service_run_id);
+}
+
+function runSummaryChunks(run) {
+  const summary = run?.response_payload?.summary;
+  if (!summary || typeof summary !== "object") return [];
+  return [
+    summary.ad_count != null ? `ad_count: ${summary.ad_count}` : null,
+    summary.stop_reason ? `stop_reason: ${summary.stop_reason}` : null,
+    summary.targeting?.view_all_page_id ? `view_all_page_id: ${summary.targeting.view_all_page_id}` : null,
+  ].filter(Boolean);
+}
+
 // ---------------------------------------------------------------------------
 export default function App() {
   const [tab, setTab] = useState("runs");
@@ -118,6 +176,7 @@ export default function App() {
   const popRef = useRef(null);
 
   const [actionMessage, setActionMessage] = useState(null);
+  const activeMetaRunSignature = activeMetaAdRunIds(brands).join("|");
 
   async function refreshDashboardBrands({ showLoading = false } = {}) {
     if (showLoading) setLoadingBrands(true);
@@ -157,15 +216,17 @@ export default function App() {
   }
 
   function markServiceFinished(brandId, serviceKey, result, fallbackMessage) {
-    const success = Boolean(result?.success);
+    const nextStatus = statusFromConductorResult(result);
+    const accepted = nextStatus === "running";
+    const success = nextStatus === "success";
     updateRun(brandId, serviceKey, {
-      status: success ? "success" : "error",
+      status: nextStatus,
       service_run_id: result?.service_run_id,
       message: result?.message || fallbackMessage,
     });
     setActionMessage({
-      tone: success ? "success" : "error",
-      text: `${serviceKey}: ${result?.message || fallbackMessage}`,
+      tone: success ? "success" : accepted ? "warning" : "error",
+      text: `${serviceKey}: ${result?.message || fallbackMessage}${result?.service_run_id ? ` · service_run_id ${result.service_run_id}` : ""}`,
     });
   }
 
@@ -210,6 +271,30 @@ export default function App() {
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
+
+  useEffect(() => {
+    const runIds = activeMetaAdRunIds(brands);
+    if (runIds.length === 0) return undefined;
+
+    let cancelled = false;
+    async function pollMetaRuns() {
+      try {
+        await Promise.all(runIds.map((runId) => getMetaAdLibraryRun(runId).catch((error) => ({ error, runId }))));
+        if (!cancelled) await refreshDashboardBrands();
+      } catch (error) {
+        if (!cancelled) {
+          setActionMessage({ tone: "error", text: `No se pudo refrescar el run async de Meta Ads: ${error.message}` });
+        }
+      }
+    }
+
+    pollMetaRuns();
+    const timer = window.setInterval(pollMetaRuns, META_ADS_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeMetaRunSignature]);
 
   // -- Real conductor calls --------------------------------------------------
   async function triggerService(brandId, serviceKey) {
@@ -305,22 +390,22 @@ export default function App() {
       `}</style>
 
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: `1px solid ${COLORS.line}` }}>
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6" style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+        <div className="flex min-w-0 items-center gap-3">
           <svg width="22" height="18" viewBox="0 0 22 18">
             <line x1="0" y1="12" x2="22" y2="12" stroke={COLORS.ink} strokeWidth="1.3" />
             <line x1="11" y1="0" x2="11" y2="18" stroke={COLORS.ink} strokeWidth="1.3" />
             <circle cx="11" cy="12" r="3" fill={COLORS.ink} />
           </svg>
           <span className="display text-2xl tracking-wide lowercase">velz</span>
-          <span className="text-xs uppercase tracking-widest mt-1" style={{ color: COLORS.muted }}>outreach ops</span>
+          <span className="mt-1 truncate text-xs uppercase tracking-widest" style={{ color: COLORS.muted }}>outreach ops</span>
         </div>
-        <div className="flex gap-1 rounded-full p-1" style={{ background: "#F4F3EF" }}>
-          {["runs", "cascades"].map(t => (
+        <div className="grid grid-cols-3 gap-1 rounded-full p-1 sm:flex" style={{ background: "#F4F3EF" }}>
+          {["runs", "outreach", "cascades"].map(t => (
             <button key={t} onClick={() => setTab(t)}
               className="px-4 py-1.5 rounded-full text-xs font-medium transition-colors"
               style={{ background: tab === t ? COLORS.ink : "transparent", color: tab === t ? "#fff" : COLORS.ink }}>
-              {t === "runs" ? "Ejecuciones" : "Cascadas"}
+              {t === "runs" ? "Ejecuciones" : t === "outreach" ? "Outreach" : "Cascadas"}
             </button>
           ))}
         </div>
@@ -336,6 +421,8 @@ export default function App() {
           popover={popover} setPopover={setPopover} popRef={popRef}
           openBrandDrawer={setDrawerBrand}
         />
+      ) : tab === "outreach" ? (
+        <OutreachView brands={filtered} loading={loadingBrands} error={loadError} openBrandDrawer={setDrawerBrand} />
       ) : (
         <CascadesView
           brands={brands} selected={selected} cascades={cascades} setCascades={setCascades}
@@ -343,7 +430,14 @@ export default function App() {
         />
       )}
 
-      <BrandDrawer brand={drawerBrand} onClose={() => setDrawerBrand(null)} />
+      <BrandDrawer
+        brand={drawerBrand}
+        onClose={() => setDrawerBrand(null)}
+        onRefresh={async () => {
+          const rows = await refreshDashboardBrands();
+          setDrawerBrand((current) => current ? rows.find((brand) => brand.id === current.id) || current : current);
+        }}
+      />
     </div>
   );
 }
@@ -351,22 +445,22 @@ export default function App() {
 // ---------------------------------------------------------------------------
 function RunsView({ brands, search, setSearch, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer }) {
   return (
-    <div className="px-6 py-5">
+    <div className="px-4 py-4 sm:px-6 sm:py-5">
       {/* Toolbar */}
-      <div className="flex items-center justify-between mb-4 gap-4 flex-wrap">
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-md" style={{ border: `1px solid ${COLORS.line}` }}>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-4">
+        <div className="flex w-full items-center gap-2 rounded-md px-3 py-2 sm:w-auto sm:py-1.5" style={{ border: `1px solid ${COLORS.line}` }}>
           <Search size={14} color={COLORS.muted} />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Buscar marca o dominio…"
-            className="outline-none text-xs w-56 bg-transparent" />
+            className="w-full bg-transparent text-sm outline-none sm:w-56 sm:text-xs" />
         </div>
         {selected.size > 0 && (
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
             <span style={{ color: COLORS.muted }}>{selected.size} seleccionadas</span>
             <BulkTrigger onTrigger={triggerBulk} />
           </div>
         )}
-        <div className="flex items-center gap-3 text-xs ml-auto" style={{ color: COLORS.muted }}>
+        <div className="flex items-center gap-3 text-xs sm:ml-auto" style={{ color: COLORS.muted }}>
           <Legend />
         </div>
       </div>
@@ -386,13 +480,14 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
       )}
 
       {/* Table */}
-      <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${COLORS.line}` }}>
-        <table className="w-full text-xs">
+      <div className="hidden overflow-x-auto rounded-md sm:block" style={{ border: `1px solid ${COLORS.line}` }}>
+        <table className="w-full min-w-[980px] text-xs">
           <thead>
             <tr style={{ background: "#FAFAF8", borderBottom: `1px solid ${COLORS.line}` }}>
               <th className="w-8 py-2.5"></th>
               <th className="text-left px-3 py-2.5 font-medium" style={{ color: COLORS.muted }}>Marca</th>
               <th className="text-right px-3 py-2.5 font-medium mono" style={{ color: COLORS.muted }}>Revenue/mes</th>
+              <th className="text-left px-3 py-2.5 font-medium" style={{ color: COLORS.muted }}>Outreach</th>
               {SERVICES.map(s => (
                 <th key={s.key} className="px-2 py-2.5 font-medium text-center" style={{ color: s.deployed ? COLORS.ink : COLORS.muted, minWidth: 88 }}>
                   <div className="flex flex-col items-center gap-0.5">
@@ -407,21 +502,21 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={SERVICES.length + 4} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>
+                <td colSpan={SERVICES.length + 5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>
                   <span className="inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Cargando datos reales desde Supabase…</span>
                 </td>
               </tr>
             )}
             {!loading && error && (
               <tr>
-                <td colSpan={SERVICES.length + 4} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>
+                <td colSpan={SERVICES.length + 5} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>
                   No se pudieron leer los datos reales de Supabase: {error.message}
                 </td>
               </tr>
             )}
             {!loading && !error && brands.length === 0 && (
               <tr>
-                <td colSpan={SERVICES.length + 4} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>
+                <td colSpan={SERVICES.length + 5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>
                   No hay marcas en Supabase para mostrar.
                 </td>
               </tr>
@@ -443,6 +538,7 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
                   </button>
                 </td>
                 <td className="px-3 py-2.5 text-right mono">{fmtMoney(b.revenue)}</td>
+                <td className="px-3 py-2.5"><OutreachStatusCell outreach={b.outreach} error={b.outreachLoadError} /></td>
                 {SERVICES.map(s => (
                   <td key={s.key} className="px-2 py-1.5 relative">
                     <button className="w-full" onClick={() => setPopover(p => p?.brandId === b.id && p?.serviceKey === s.key ? null : { brandId: b.id, serviceKey: s.key })}>
@@ -468,11 +564,108 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
         </table>
       </div>
 
-      <div className="mt-3 text-[11px] flex items-start gap-1.5" style={{ color: COLORS.muted }}>
+      <div className="space-y-3 sm:hidden">
+        {loading && (
+          <div className="rounded-md px-4 py-8 text-center text-xs" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.muted }}>
+            <span className="inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Cargando datos reales desde Supabase…</span>
+          </div>
+        )}
+        {!loading && error && (
+          <div className="rounded-md px-4 py-8 text-center text-xs" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.red }}>
+            No se pudieron leer los datos reales de Supabase: {error.message}
+          </div>
+        )}
+        {!loading && !error && brands.length === 0 && (
+          <div className="rounded-md px-4 py-8 text-center text-xs" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.muted }}>
+            No hay marcas en Supabase para mostrar.
+          </div>
+        )}
+        {!loading && !error && brands.map((brand) => (
+          <MobileBrandCard
+            key={brand.id}
+            brand={brand}
+            selected={selected.has(brand.id)}
+            toggleRow={toggleRow}
+            triggerService={triggerService}
+            triggerPipeline={triggerPipeline}
+            popover={popover}
+            setPopover={setPopover}
+            popRef={popRef}
+            openBrandDrawer={openBrandDrawer}
+          />
+        ))}
+      </div>
+
+      <div className="mt-3 flex items-start gap-1.5 text-[11px]" style={{ color: COLORS.muted }}>
         <Info size={13} className="mt-0.5 shrink-0" />
-        <span>Marcas y estado leídos en vivo desde Supabase <span className="mono">velz-outreach</span>. “Ejecutar ahora”, Pipeline y cascadas llaman al conductor configurado en <span className="mono">VITE_CONDUCTOR_BASE_URL</span>; al terminar se refrescan las ejecuciones persistidas.</span>
+        <span>Marcas y estado leídos en vivo desde Supabase <span className="mono">velz-outreach</span>. “Ejecutar ahora”, Pipeline y cascadas llaman al conductor configurado en <span className="mono">VITE_CONDUCTOR_BASE_URL</span>; Meta Ads arranca como job async, guarda <span className="mono">service_run_id</span> y se refresca con polling corto sin mantener una request larga abierta.</span>
       </div>
     </div>
+  );
+}
+
+function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPipeline, popover, setPopover, popRef, openBrandDrawer }) {
+  const mobilePopoverService = SERVICES.find((service) => popover?.brandId === brand.id && popover?.serviceKey === service.key);
+
+  return (
+    <article className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: selected ? "#F6F8F6" : COLORS.paper }}>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <label className="mt-1 flex shrink-0 items-center gap-2 text-xs" style={{ color: COLORS.muted }}>
+          <input type="checkbox" checked={selected} onChange={() => toggleRow(brand.id)} />
+          Sel.
+        </label>
+        <button type="button" onClick={() => openBrandDrawer(brand)} className="min-w-0 flex-1 text-left" title="Abrir panel de verificación de marca">
+          <div className="truncate font-medium underline-offset-2 hover:underline">{brand.name}</div>
+          <div className="mono truncate text-[11px]" style={{ color: COLORS.muted }}>{brand.domain}</div>
+        </button>
+        <div className="shrink-0 text-right mono text-[11px]">
+          <div style={{ color: COLORS.muted }}>Revenue/mes</div>
+          <div>{fmtMoney(brand.revenue)}</div>
+        </div>
+      </div>
+
+      <div className="mb-3 rounded-md px-3 py-2" style={{ background: "#FAFAF8", border: `1px solid ${COLORS.line}` }}>
+        <div className="mb-1 text-[10px] uppercase tracking-wide" style={{ color: COLORS.muted }}>Outreach</div>
+        <OutreachStatusCell outreach={brand.outreach} error={brand.outreachLoadError} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {SERVICES.map((service) => {
+          const status = statusOf(brand, service.key);
+          return (
+            <div key={service.key} className="relative">
+              <button
+                type="button"
+                onClick={() => setPopover((current) => current?.brandId === brand.id && current?.serviceKey === service.key ? null : { brandId: brand.id, serviceKey: service.key })}
+                className="flex min-h-[70px] w-full flex-col items-center justify-center gap-1 rounded-md px-2 py-2 text-center"
+                style={{ border: `1px solid ${COLORS.line}`, color: service.deployed ? COLORS.ink : COLORS.muted, background: "#FAFAF8" }}
+              >
+                <StatusDot status={status} />
+                <span className="text-[11px] leading-tight">{service.label}</span>
+                {!service.deployed && <span className="text-[9px] leading-none" style={{ color: COLORS.muted }}>no desplegado</span>}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {mobilePopoverService && (
+        <div ref={popRef} className="mt-2">
+          <CellPopoverImpl
+            brand={brand}
+            service={mobilePopoverService}
+            onTrigger={() => { triggerService(brand.id, mobilePopoverService.key); }}
+            onClose={() => setPopover(null)}
+          />
+        </div>
+      )}
+
+      <button onClick={() => triggerPipeline(brand.id)}
+        className="mt-3 flex w-full items-center justify-center gap-1 rounded px-3 py-2 text-xs font-medium"
+        style={{ border: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
+        <Play size={12} /> Ejecutar pipeline
+      </button>
+    </article>
   );
 }
 
@@ -482,7 +675,7 @@ function Legend() {
     { s: "partial", l: "Parcial" }, { s: "running", l: "Ejecutando" }, { s: "not_run", l: "Sin ejecutar" },
   ];
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:min-w-max sm:flex-nowrap">
       {items.map(it => (
         <div key={it.s} className="flex items-center gap-1">
           <div style={{ transform: "scale(0.6)" }}><StatusDot status={it.s} /></div>
@@ -521,11 +714,11 @@ function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
   const run = brand.runs[service.key];
   const status = run?.status || "not_run";
   return (
-    <div className="absolute z-30 top-8 left-1/2 -translate-x-1/2 w-56 rounded-md p-3 text-left"
+    <div className="z-30 w-full min-w-56 rounded-md p-3 text-left sm:absolute sm:left-1/2 sm:top-8 sm:w-56 sm:-translate-x-1/2"
       style={{ background: "#fff", border: `1px solid ${COLORS.line}`, boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}>
       <div className="flex items-center justify-between mb-2">
         <span className="font-medium text-[11px]">{service.label}</span>
-        <StatusDot status={status} />
+        <div className="w-10 shrink-0"><StatusDot status={status} /></div>
       </div>
       <div className="text-[11px] mb-2" style={{ color: COLORS.muted }}><StatusLabel status={status} /></div>
       {run?.started_at && (
@@ -533,6 +726,16 @@ function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
           Inicio: {fmtTime(run.started_at)} · Duración: {fmtDuration(run.duration_ms)}
         </div>
       )}
+      {run?.service_run_id && (
+        <div className="mono text-[10px] mb-1 break-all" style={{ color: COLORS.muted }}>
+          service_run_id: {run.service_run_id}
+        </div>
+      )}
+      {runSummaryChunks(run).map((chunk) => (
+        <div key={chunk} className="mono text-[10px] mb-1" style={{ color: COLORS.muted }}>
+          {chunk}
+        </div>
+      ))}
       {run?.message && (
         <div className="text-[10px] mb-2" style={{ color: status === "error" ? COLORS.red : COLORS.muted }}>
           {run.message}
@@ -552,6 +755,78 @@ function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
     </div>
   );
 }
+// ---------------------------------------------------------------------------
+const OUTREACH_FILTERS = [
+  { key: "all", label: "Todos" },
+  { key: "needs_review", label: "Needs review" },
+  { key: "ready_to_launch", label: "Ready to launch" },
+  { key: "launched", label: "Launched" },
+  { key: "provider_pending", label: "Provider pending" },
+  { key: "engaged", label: "Engaged" },
+  { key: "failed_blocked", label: "Failed / blocked" },
+  { key: "suppressed", label: "Suppressed" },
+];
+
+function OutreachView({ brands, loading, error, openBrandDrawer }) {
+  const [filter, setFilter] = useState("all");
+  const rows = brands.filter((brand) => filter === "all" || deriveOutreachFilters(brand.outreach).includes(filter));
+
+  return (
+    <div className="px-4 py-4 sm:px-6 sm:py-5">
+      <div className="mb-4 flex flex-wrap gap-2 text-xs">
+        {OUTREACH_FILTERS.map((item) => (
+          <button key={item.key} onClick={() => setFilter(item.key)} className="rounded-full px-3 py-1 font-medium" style={{ background: filter === item.key ? COLORS.ink : COLORS.soft, color: filter === item.key ? "#fff" : COLORS.ink }}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${COLORS.line}` }}>
+        <table className="w-full min-w-[900px] text-xs">
+          <thead>
+            <tr style={{ background: "#FAFAF8", borderBottom: `1px solid ${COLORS.line}` }}>
+              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Marca / lead</th>
+              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Readiness</th>
+              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Lifecycle</th>
+              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Provider / engagement</th>
+              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Next action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}><Loader2 size={14} className="mr-2 inline animate-spin" /> Cargando Outreach desde Supabase…</td></tr>}
+            {!loading && error && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>No se pudieron leer marcas: {error.message}</td></tr>}
+            {!loading && !error && rows.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>No hay leads para este filtro.</td></tr>}
+            {!loading && !error && rows.map((brand) => {
+              const outreach = brand.outreach;
+              const tone = outreachTone(outreach);
+              return (
+                <tr key={brand.id} style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+                  <td className="px-3 py-3 align-top">
+                    <button onClick={() => openBrandDrawer(brand)} className="text-left underline-offset-2 hover:underline">
+                      <div className="font-medium">{brand.name}</div>
+                      <div className="mono text-[11px]" style={{ color: COLORS.muted }}>{outreach?.leadId || "sin lead"} · {outreach?.email || brand.domain}</div>
+                    </button>
+                  </td>
+                  <td className="px-3 py-3 align-top"><OutreachBadge value={outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "No sequence")} tone={brand.outreachLoadError ? "amber" : tone} /></td>
+                  <td className="px-3 py-3 align-top"><OutreachBadge value={outreach?.lifecycle?.label || "Not launched"} tone={tone} /></td>
+                  <td className="px-3 py-3 align-top mono text-[11px]" style={{ color: COLORS.muted }}>
+                    <div>sequence: {outreach?.provider?.provider_sequence_id || "—"}</div>
+                    <div>import: {outreach?.provider?.provider_import_status || outreach?.provider?.provider_import_request_id || "—"}</div>
+                    <div>events: {Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}:${count}`).join(" · ") || "—"}</div>
+                    <div>tool: {Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}:${count}`).join(" · ") || "—"}</div>
+                  </td>
+                  <td className="px-3 py-3 align-top" style={{ color: outreach?.blockers?.length ? COLORS.red : COLORS.ink }}>
+                    {brand.outreachLoadError ? `Supabase read blocked: ${brand.outreachLoadError.message}` : outreach?.nextAction?.label || "No outreach data"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 function CascadesView({ brands, selected, cascades, setCascades, triggerService }) {
   const [name, setName] = useState("");
@@ -602,7 +877,7 @@ function CascadesView({ brands, selected, cascades, setCascades, triggerService 
   const availableToAdd = SERVICES.filter(s => s.deployed && !steps.some(st => st.key === s.key));
 
   return (
-    <div className="px-6 py-5 grid grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 gap-5 px-4 py-4 sm:grid-cols-2 sm:gap-6 sm:px-6 sm:py-5">
       {/* Builder */}
       <div className="rounded-md p-4" style={{ border: `1px solid ${COLORS.line}` }}>
         <h3 className="font-medium mb-3">Nueva cascada</h3>
@@ -669,10 +944,10 @@ function CascadesView({ brands, selected, cascades, setCascades, triggerService 
         )}
 
         <label className="block text-[11px] mb-1" style={{ color: COLORS.muted }}>Programación</label>
-        <div className="flex items-center gap-3 mb-2">
+        <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-center">
           <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)}
             className="px-2 py-1.5 rounded text-xs mono" style={{ border: `1px solid ${COLORS.line}` }} />
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {WEEKDAYS.map((d, i) => (
               <button key={i} onClick={() => toggleDay(i)}
                 className="w-6 h-6 rounded-full text-[10px] font-medium"

@@ -1,3 +1,5 @@
+import { deriveOutreachStatus, QA_LEAD_ID } from "./outreachStatus";
+
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -11,6 +13,7 @@ const BRAND_FIELDS = [
 ].join(",");
 
 const RUN_FIELDS = [
+  "id",
   "brand_id",
   "service_key",
   "status",
@@ -20,6 +23,14 @@ const RUN_FIELDS = [
   "created_at",
   "error_payload",
   "response_payload",
+].join(",");
+
+const META_SCRAPE_FIELDS = [
+  "brand_id",
+  "service_run_id",
+  "ad_count",
+  "raw_payload",
+  "created_at",
 ].join(",");
 
 const META_AD_FIELDS = [
@@ -70,6 +81,8 @@ const CONTEXT_FIELDS = [
   "created_at",
 ].join(",");
 
+const OUTREACH_LIMIT = "2000";
+
 function requireSupabaseConfig() {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     throw new Error(
@@ -115,25 +128,73 @@ function toDashboardBrand(row) {
   };
 }
 
+function summarizeMetaScrape(scrape) {
+  const raw = scrape?.raw_payload && typeof scrape.raw_payload === "object" ? scrape.raw_payload : {};
+  const rawSummary = raw.summary && typeof raw.summary === "object" ? raw.summary : {};
+  return {
+    ad_count: rawSummary.ad_count ?? raw.ad_count ?? scrape?.ad_count,
+    stop_reason: rawSummary.stop_reason ?? raw.stop_reason,
+    targeting: rawSummary.targeting ?? raw.targeting,
+  };
+}
+
+function mergeMetaScrapeIntoRun(run, scrape) {
+  if (!scrape) return run;
+  const summary = summarizeMetaScrape(scrape);
+  const currentPayload = run.response_payload && typeof run.response_payload === "object" ? run.response_payload : {};
+  const currentSummary = currentPayload.summary && typeof currentPayload.summary === "object" ? currentPayload.summary : {};
+  return {
+    ...run,
+    response_payload: {
+      ...currentPayload,
+      summary: {
+        ...summary,
+        ...currentSummary,
+        targeting: currentSummary.targeting ?? summary.targeting,
+        stop_reason: currentSummary.stop_reason ?? summary.stop_reason,
+        ad_count: currentSummary.ad_count ?? summary.ad_count,
+      },
+    },
+  };
+}
+
 function runMessage(run) {
   if (run.error_payload) {
+    const phase = run.error_payload.phase;
     const type = run.error_payload.type || run.error_payload.name;
     const error = run.error_payload.error || run.error_payload.message || run.error_payload.detail;
-    return [type, error].filter(Boolean).join(": ") || JSON.stringify(run.error_payload);
+    return [phase, type, error].filter(Boolean).join(": ") || JSON.stringify(run.error_payload);
   }
 
   if (run.response_payload) {
+    const summary = run.response_payload.summary && typeof run.response_payload.summary === "object" ? run.response_payload.summary : null;
+    if (summary) {
+      const chunks = [];
+      if (summary.ad_count != null) chunks.push(`${summary.ad_count} ads`);
+      if (summary.stop_reason) chunks.push(`stop_reason=${summary.stop_reason}`);
+      if (summary.targeting?.view_all_page_id) chunks.push(`view_all_page_id=${summary.targeting.view_all_page_id}`);
+      if (chunks.length > 0) return chunks.join(" · ");
+    }
     return run.response_payload.message || run.response_payload.error || run.response_payload.detail || null;
   }
 
   return null;
 }
 
-function attachLatestRuns(brands, runs) {
+function attachLatestRuns(brands, runs, metaScrapes = []) {
   const byBrand = new Map(brands.map((brand) => [brand.id, { ...brand, runs: {} }]));
+  const scrapeByRunId = new Map();
+
+  for (const scrape of metaScrapes) {
+    if (scrape?.service_run_id) scrapeByRunId.set(scrape.service_run_id, scrape);
+  }
   const seen = new Set();
 
-  for (const run of runs) {
+  for (const row of runs) {
+    let run = row;
+    if (run.service_key === "meta_ad_library_scraper") {
+      run = mergeMetaScrapeIntoRun(run, scrapeByRunId.get(run.id));
+    }
     if (!run.brand_id || !run.service_key) continue;
     const key = `${run.brand_id}:${run.service_key}`;
     if (seen.has(key)) continue;
@@ -143,6 +204,8 @@ function attachLatestRuns(brands, runs) {
     if (!brand) continue;
 
     brand.runs[run.service_key] = {
+      id: run.id,
+      service_run_id: run.id,
       status: run.status || "not_run",
       started_at: run.started_at || run.created_at,
       finished_at: run.finished_at,
@@ -154,6 +217,109 @@ function attachLatestRuns(brands, runs) {
   }
 
   return Array.from(byBrand.values());
+}
+
+function groupBy(rows, key) {
+  const grouped = new Map();
+  for (const row of rows || []) {
+    const value = row?.[key];
+    if (!value) continue;
+    if (!grouped.has(value)) grouped.set(value, []);
+    grouped.get(value).push(row);
+  }
+  return grouped;
+}
+
+function latestOutreachRow(rows = []) {
+  return rows.filter(Boolean).reduce((latest, row) => {
+    if (!latest) return row;
+    const left = new Date(latest.updated_at || latest.created_at || latest.sent_at || latest.last_provider_sync_at || 0).getTime();
+    const right = new Date(row.updated_at || row.created_at || row.sent_at || row.last_provider_sync_at || 0).getTime();
+    return right >= left ? row : latest;
+  }, null);
+}
+
+function activeSuppressionForEmail(suppressionsByEmail, email) {
+  if (!email) return null;
+  const rows = suppressionsByEmail.get(String(email).toLowerCase()) || [];
+  return latestOutreachRow(rows.filter((row) => row.active !== false));
+}
+
+function idsForInFilter(ids) {
+  return Array.from(new Set(ids.filter(Boolean))).join(",");
+}
+
+async function loadOutreachForBrands(brands) {
+  if (brands.length === 0) return new Map();
+  const brandIds = idsForInFilter(brands.map((brand) => brand.id));
+  const leadParams = new URLSearchParams({
+    select: "*",
+    brand_id: `in.(${brandIds})`,
+    limit: OUTREACH_LIMIT,
+  });
+  const leads = await supabaseRest("v_lead_overview", leadParams);
+  const normalizedLeads = leads.map((lead) => ({ ...lead, lead_id: lead.lead_id || lead.id }));
+  const leadIds = idsForInFilter(normalizedLeads.map((lead) => lead.lead_id));
+  if (!leadIds) return new Map();
+
+  const sequenceParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "updated_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
+  const sendParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "updated_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
+  const eventParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "event_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
+  const magnetParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "event_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
+
+  const [sequences, sends, events, magnetEvents] = await Promise.all([
+    supabaseRest("email_sequences", sequenceParams),
+    supabaseRest("email_sends", sendParams),
+    supabaseRest("email_events", eventParams),
+    supabaseRest("lead_magnet_events", magnetParams),
+  ]);
+
+  let suppressions = [];
+  const emails = normalizedLeads.map((lead) => lead.primary_email || lead.email).filter(Boolean).map((email) => `"${String(email).toLowerCase()}"`);
+  if (emails.length > 0) {
+    const suppressionParams = new URLSearchParams({
+      select: "*",
+      email: `in.(${idsForInFilter(emails)})`,
+      order: "updated_at.desc.nullslast,created_at.desc.nullslast",
+      limit: OUTREACH_LIMIT,
+    });
+    suppressions = await supabaseRest("email_suppression_entries", suppressionParams);
+  }
+
+  const leadsByBrand = groupBy(normalizedLeads, "brand_id");
+  const sequencesByLead = groupBy(sequences, "lead_id");
+  const sendsByLead = groupBy(sends, "lead_id");
+  const eventsByLead = groupBy(events, "lead_id");
+  const magnetEventsByLead = groupBy(magnetEvents, "lead_id");
+  const suppressionsByEmail = groupBy(suppressions.map((row) => ({ ...row, email: String(row.email || row.recipient_email || "").toLowerCase() })), "email");
+
+  return new Map(brands.map((brand) => {
+    const brandLeads = leadsByBrand.get(brand.id) || [];
+    const lead = brandLeads.find((item) => item.lead_id === QA_LEAD_ID) || brandLeads[0] || null;
+    if (!lead) return [brand.id, null];
+    const sequence = latestOutreachRow(sequencesByLead.get(lead.lead_id) || []);
+    const sendRows = sendsByLead.get(lead.lead_id) || [];
+    const send = latestOutreachRow(sequence?.id ? sendRows.filter((row) => row.email_sequence_id === sequence.id) : sendRows);
+    const email = lead.primary_email || lead.email;
+    return [brand.id, deriveOutreachStatus({
+      leadId: lead.lead_id,
+      lead,
+      sequence,
+      send,
+      events: eventsByLead.get(lead.lead_id) || [],
+      magnetEvents: magnetEventsByLead.get(lead.lead_id) || [],
+      suppression: activeSuppressionForEmail(suppressionsByEmail, email),
+      launchConfigured: Boolean(import.meta.env.VITE_OUTREACH_ORCHESTRATION_BASE_URL),
+    })];
+  }));
+}
+
+function attachOutreach(brands, outreachByBrand, error = null) {
+  return brands.map((brand) => ({
+    ...brand,
+    outreach: outreachByBrand?.get(brand.id) || null,
+    outreachLoadError: error,
+  }));
 }
 
 export async function loadDashboardBrands({ limit = 500 } = {}) {
@@ -176,7 +342,32 @@ export async function loadDashboardBrands({ limit = 500 } = {}) {
   });
   const runRows = await supabaseRest("service_runs", runParams);
 
-  return attachLatestRuns(brands, runRows);
+  let metaScrapeRows = [];
+  try {
+    const scrapeParams = new URLSearchParams({
+      select: META_SCRAPE_FIELDS,
+      brand_id: `in.(${ids})`,
+      order: "created_at.desc.nullslast",
+      limit: "2000",
+    });
+    metaScrapeRows = await supabaseRest("meta_ad_scrapes", scrapeParams);
+  } catch (error) {
+    console.warn("No se pudo leer meta_ad_scrapes para enriquecer el resumen Meta Ads", error);
+  }
+
+  const withRuns = attachLatestRuns(brands, runRows, metaScrapeRows);
+  try {
+    const outreachByBrand = await loadOutreachForBrands(withRuns);
+    return attachOutreach(withRuns, outreachByBrand);
+  } catch (error) {
+    console.warn("No se pudo leer el estado Outreach desde Supabase; el dashboard de señales sigue disponible", error);
+    return attachOutreach(withRuns, new Map(), error);
+  }
+}
+
+export async function loadBrandOutreach(brandId) {
+  const brands = await loadDashboardBrands({ limit: 500 });
+  return brands.find((brand) => brand.id === brandId)?.outreach || null;
 }
 
 export async function loadMetaAds(brandId) {

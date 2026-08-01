@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { loadBrandSource } from "./supabaseData";
+import { launchSaleshandyQaBulk, saleshandyQaLaunchConfigured } from "./conductorApi";
 import {
   COLORS,
   VERIFICATION_SERVICES,
@@ -75,6 +76,151 @@ function EmptyState({ children, tone = COLORS.muted }) {
   return <div className="rounded-md p-3 text-xs" style={{ background: COLORS.wash, color: tone }}>{children}</div>;
 }
 
+function outreachTone(outreach) {
+  if (!outreach) return COLORS.muted;
+  if (outreach.lifecycle?.key === "suppressed" || outreach.lifecycle?.key === "failed" || outreach.readiness?.key === "blocked") return COLORS.red;
+  if (outreach.readiness?.key === "pending_review" || outreach.lifecycle?.key === "import_pending") return COLORS.amber;
+  if (["approved", "sent", "opened", "clicked"].includes(outreach.readiness?.key) || ["sent", "opened", "clicked"].includes(outreach.lifecycle?.key)) return COLORS.green;
+  return COLORS.muted;
+}
+
+function OutreachPill({ children, tone = COLORS.muted }) {
+  return <span className="inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ color: tone, background: `${tone}14`, border: `1px solid ${tone}33` }}>{children || "—"}</span>;
+}
+
+function KeyValue({ label, value, href }) {
+  return (
+    <div>
+      <dt style={{ color: COLORS.muted }}>{label}</dt>
+      <dd className="mono break-all">
+        {href && value ? <a href={href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">{value}<ExternalLink size={10} /></a> : value || "—"}
+      </dd>
+    </div>
+  );
+}
+
+function LaunchResult({ result }) {
+  if (!result) return null;
+  const sendIds = Array.isArray(result.email_send_ids) ? result.email_send_ids.join(", ") : result.email_send_ids;
+  return (
+    <div className="mt-3 rounded-md p-3 text-xs" style={{ background: COLORS.wash, border: `1px solid ${COLORS.line}` }}>
+      <h4 className="mb-2 font-medium">Resultado launch QA</h4>
+      <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <KeyValue label="bulk_run_id" value={result.bulk_run_id} />
+        <KeyValue label="email_send_ids" value={sendIds} />
+        <KeyValue label="provider_sequence_id" value={result.provider_sequence_id} />
+        <KeyValue label="provider_import_request_id" value={result.provider_import_request_id} />
+        <KeyValue label="provider_import_status" value={result.provider_import_status} />
+        <KeyValue label="tool_url" value={result.tool_url || result.public_tool_url} href={result.tool_url || result.public_tool_url} />
+      </dl>
+    </div>
+  );
+}
+
+function OutreachSection({ brand, onRefresh }) {
+  const outreach = brand.outreach;
+  const [confirming, setConfirming] = useState(false);
+  const [launching, setLaunching] = useState(false);
+  const [launchResult, setLaunchResult] = useState(null);
+  const [launchError, setLaunchError] = useState(null);
+  const configured = saleshandyQaLaunchConfigured();
+  const tone = outreachTone(outreach);
+  const sequence = outreach?.sequence;
+  const send = outreach?.send;
+  const provider = outreach?.provider || {};
+  const events = Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
+  const magnetEvents = Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
+  const canLaunch = Boolean(outreach?.launchEligible && configured);
+
+  async function runLaunch() {
+    setLaunching(true);
+    setLaunchError(null);
+    try {
+      const result = await launchSaleshandyQaBulk();
+      setLaunchResult(result || {});
+      setConfirming(false);
+      await onRefresh?.();
+    } catch (error) {
+      setLaunchError(error);
+    } finally {
+      setLaunching(false);
+    }
+  }
+
+  return (
+    <section className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <h3 className="font-medium">Outreach</h3>
+          <p className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>Sequence readiness, Saleshandy lifecycle, provider IDs and engagement evidence.</p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <OutreachPill tone={tone}>{outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "No sequence")}</OutreachPill>
+          <OutreachPill tone={tone}>{outreach?.lifecycle?.label || "Not launched"}</OutreachPill>
+        </div>
+      </div>
+
+      {brand.outreachLoadError && <EmptyState tone={COLORS.amber}>No se pudieron leer las tablas Outreach con la anon key actual: {brand.outreachLoadError.message}</EmptyState>}
+      {!brand.outreachLoadError && !outreach && <EmptyState>No hay lead/outreach asociado a esta marca.</EmptyState>}
+
+      {outreach && (
+        <div className="space-y-4 text-xs">
+          {outreach.suppression && <EmptyState tone={COLORS.red}>Suppression activa: {outreach.suppression.reason || outreach.suppression.type || "sin motivo"}. No enviar.</EmptyState>}
+          {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos visibles: {outreach.blockers.join(" · ")}</EmptyState>}
+          <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <KeyValue label="recipient" value={outreach.email} />
+            <KeyValue label="lead_id" value={outreach.leadId} />
+            <KeyValue label="subject" value={sequence?.subject} />
+            <KeyValue label="tool_key" value={sequence?.tool_key || outreach.lead?.tool_key} />
+            <KeyValue label="public tool URL" value={outreach.toolUrl} href={outreach.toolUrl} />
+            <KeyValue label="sequence status" value={sequence?.status || sequence?.readiness_status} />
+            <KeyValue label="review_status" value={sequence?.review_status} />
+            <KeyValue label="send_status" value={sequence?.send_status} />
+            <KeyValue label="latest email_sends.status" value={send?.status || send?.send_status} />
+            <KeyValue label="send_mode" value={send?.send_mode} />
+            <KeyValue label="provider_sequence_id" value={provider.provider_sequence_id} />
+            <KeyValue label="provider_prospect_id" value={provider.provider_prospect_id} />
+            <KeyValue label="provider_import_request_id" value={provider.provider_import_request_id} />
+            <KeyValue label="provider_import_status" value={provider.provider_import_status} />
+            <KeyValue label="last provider sync" value={fmtTime(provider.last_provider_sync_at)} />
+            <KeyValue label="sent_at" value={fmtTime(send?.sent_at)} />
+            <KeyValue label="latest engagement" value={events || "sin eventos"} />
+            <KeyValue label="latest tool activity" value={magnetEvents || "sin actividad"} />
+          </dl>
+          <EmptyState tone={outreach.blockers?.length ? COLORS.amber : COLORS.green}>Siguiente acción: {outreach.nextAction?.label}</EmptyState>
+          <div>
+            <button onClick={() => setConfirming(true)} disabled={!canLaunch} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canLaunch ? COLORS.green : COLORS.line, color: canLaunch ? "#fff" : COLORS.muted }}>
+              Launch Saleshandy QA bulk
+            </button>
+            {!configured && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: falta configurar VITE_OUTREACH_ORCHESTRATION_BASE_URL. El panel queda en modo read-only tracking.</p>}
+            {configured && !outreach.launchEligible && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: solo aparece para el lead QA, recipient Miguel, secuencia + tool URL existentes y sin suppression.</p>}
+          </div>
+          {launchError && <EmptyState tone={COLORS.red}>No se pudo lanzar QA: {launchError.message}</EmptyState>}
+          <LaunchResult result={launchResult} />
+        </div>
+      )}
+
+      {confirming && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+          <div className="max-w-lg rounded-lg p-5 shadow-2xl" style={{ background: COLORS.paper, border: `1px solid ${COLORS.line}` }}>
+            <h3 className="mb-2 text-base font-medium">Confirmar launch Saleshandy QA real</h3>
+            <p className="mb-3 text-xs leading-5" style={{ color: COLORS.muted }}>Esto llama al orquestador interno y puede crear/importar un prospect real en Saleshandy. Es QA-only, no scale-up bulk.</p>
+            <dl className="mb-4 grid gap-2 text-xs">
+              <KeyValue label="recipient" value={outreach?.email} />
+              <KeyValue label="subject" value={sequence?.subject} />
+              <KeyValue label="tool URL" value={outreach?.toolUrl} href={outreach?.toolUrl} />
+            </dl>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirming(false)} className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }}>Cancelar</button>
+              <button onClick={runLaunch} disabled={launching} className="rounded px-3 py-2 text-xs font-medium" style={{ background: COLORS.green, color: "#fff" }}>{launching ? "Lanzando…" : "Confirmar QA launch"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function runElapsed(run) {
   if (!run?.started_at || run.duration_ms != null) return null;
   const started = new Date(run.started_at).getTime();
@@ -86,6 +232,16 @@ function runMetaLine(run) {
   if (!run?.started_at) return "Sin ejecución registrada";
   const duration = run.duration_ms != null ? fmtDuration(run.duration_ms) : run.status === "running" ? `${fmtDuration(runElapsed(run))} transcurridos` : "—";
   return `Última ejecución ${fmtTime(run.started_at)} · ${duration}`;
+}
+
+function runSummaryChunks(run) {
+  const summary = run?.response_payload?.summary;
+  if (!summary || typeof summary !== "object") return [];
+  return [
+    summary.ad_count != null ? `ad_count: ${fmtInt(summary.ad_count)}` : null,
+    summary.stop_reason ? `stop_reason: ${summary.stop_reason}` : null,
+    summary.targeting?.view_all_page_id ? `view_all_page_id: ${summary.targeting.view_all_page_id}` : null,
+  ].filter(Boolean);
 }
 
 function SourceCard({ brand, source, state, onOpen }) {
@@ -102,6 +258,20 @@ function SourceCard({ brand, source, state, onOpen }) {
           <div className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>
             {runMetaLine(run)}
           </div>
+          {run?.service_run_id && (
+            <div className="mt-1 break-all mono text-[10px]" style={{ color: COLORS.muted }}>
+              service_run_id: {run.service_run_id}
+            </div>
+          )}
+          {runSummaryChunks(run).length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {runSummaryChunks(run).map((chunk) => (
+                <span key={chunk} className="rounded-full px-2 py-0.5 mono text-[10px]" style={{ background: COLORS.soft, color: COLORS.muted }}>
+                  {chunk}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <Badge status={status} />
       </div>
@@ -165,6 +335,15 @@ function MetaAdsSummary({ ads, run, onOpen }) {
   return (
     <div className="space-y-3 text-xs">
       <p><strong>{fmtInt(ads.length)}</strong> anuncios encontrados · <strong>{fmtInt(active)}</strong> activos hoy</p>
+      {runSummaryChunks(run).length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {runSummaryChunks(run).map((chunk) => (
+            <span key={chunk} className="rounded-full px-2 py-1 mono text-[10px]" style={{ background: COLORS.soft, color: COLORS.muted }}>
+              {chunk}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="space-y-2">
         {ads.slice(0, 2).map((ad, index) => (
           <PreviewRow key={`${ad.title}-${index}`} title={ad.title || "Anuncio sin título"} meta={ad.status || "Sin estado"} body={ad.body_text} />
@@ -270,7 +449,7 @@ function MetaAdsDetail({ ads, fullscreen }) {
         </select>
       </div>
       {visible.length === 0 ? <EmptyState>No hay anuncios para este filtro.</EmptyState> : (
-        <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
+        <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))] sm:[grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
           {visible.map((ad, index) => (
             <article key={`${ad.title}-${index}`} className="rounded-lg p-3 text-xs" style={{ border: `1px solid ${COLORS.line}` }}>
               <div className="flex items-start justify-between gap-3">
@@ -356,7 +535,7 @@ function ReviewsDetail({ reviews, fullscreen }) {
           {groups.map((group) => <ReviewCountryGroup key={group.country} group={group} />)}
         </div>
       ) : (
-        <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
+        <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))] sm:[grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
           {visible.map((review, index) => <ReviewCard key={`${review.author}-${index}`} review={review} />)}
         </div>
       )}
@@ -423,7 +602,7 @@ function TechStackDetail({ stack, fullscreen }) {
           <Meta label="Fecha de análisis" value={fmtTime(analysis?.analyzed_at || analysis?.created_at)} />
         </dl>
       </section>
-      <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
+      <div className={fullscreen ? "grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))] sm:[grid-template-columns:repeat(auto-fill,minmax(340px,1fr))]" : "space-y-3"}>
         {detections.map((detection, index) => {
           const evidence = Array.isArray(detection.evidence) ? detection.evidence : [];
           return (
@@ -483,7 +662,7 @@ function DetailPane({ brand, source, state, fullscreen, onBack }) {
   );
 }
 
-export default function BrandDrawer({ brand, onClose }) {
+export default function BrandDrawer({ brand, onClose, onRefresh }) {
   const [fullscreen, setFullscreen] = useState(false);
   const [detailSource, setDetailSource] = useState(null);
   const [sources, setSources] = useState({});
@@ -525,12 +704,12 @@ export default function BrandDrawer({ brand, onClose }) {
   if (!brand) return null;
 
   const hasRuns = runnableServices.length > 0;
-  const width = fullscreen ? "100vw" : 640;
+  const width = fullscreen ? "100vw" : undefined;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/20" aria-modal="true" role="dialog">
-      <aside className="h-full overflow-y-auto shadow-2xl transition-all" style={{ width, maxWidth: "100vw", background: COLORS.paper, color: COLORS.ink }}>
-        <header className="sticky top-0 z-10 flex items-start justify-between gap-4 px-6 py-4" style={{ borderBottom: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
+      <aside className="h-full w-full overflow-y-auto shadow-2xl transition-all sm:w-[640px]" style={{ width, maxWidth: "100vw", background: COLORS.paper, color: COLORS.ink }}>
+        <header className="sticky top-0 z-10 flex items-start justify-between gap-3 px-4 py-4 sm:gap-4 sm:px-6" style={{ borderBottom: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em]" style={{ color: COLORS.muted }}>Verificación de marca</p>
             <h1 className="mt-1 text-xl font-medium">{brand.name}</h1>
@@ -546,7 +725,8 @@ export default function BrandDrawer({ brand, onClose }) {
           </div>
         </header>
 
-        <main className="p-6">
+        <main className="p-4 sm:p-6">
+          {!detailSource && <div className="mb-4"><OutreachSection brand={brand} onRefresh={onRefresh} /></div>}
           {!hasRuns ? (
             <div className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: COLORS.wash }}>
               <p className="mb-4 text-sm">Aún no se ha ejecutado ningún servicio para esta marca. Estas fuentes siguen pendientes:</p>
@@ -562,7 +742,7 @@ export default function BrandDrawer({ brand, onClose }) {
           ) : detailSource ? (
             <DetailPane brand={brand} source={detailSource} state={sources[detailSource] || { loading: true }} fullscreen={fullscreen} onBack={() => setDetailSource(null)} />
           ) : (
-            <div className={fullscreen ? "grid grid-cols-2 gap-4" : "space-y-4"}>
+            <div className={fullscreen ? "grid grid-cols-1 gap-4 sm:grid-cols-2" : "space-y-4"}>
               {runnableServices.map((service) => (
                 <SourceCard
                   key={service.source}
