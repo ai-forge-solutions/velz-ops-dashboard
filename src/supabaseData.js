@@ -279,7 +279,8 @@ async function loadOutreachForBrands(brands) {
   if (emails.length > 0) {
     const suppressionParams = new URLSearchParams({
       select: "*",
-      email: `in.(${idsForInFilter(emails)})`,
+      // Real schema uses email_address/email_hash; there is no `email` column.
+      email_address: `in.(${idsForInFilter(emails)})`,
       order: "updated_at.desc.nullslast,created_at.desc.nullslast",
       limit: OUTREACH_LIMIT,
     });
@@ -291,7 +292,7 @@ async function loadOutreachForBrands(brands) {
   const sendsByLead = groupBy(sends, "lead_id");
   const eventsByLead = groupBy(events, "lead_id");
   const magnetEventsByLead = groupBy(magnetEvents, "lead_id");
-  const suppressionsByEmail = groupBy(suppressions.map((row) => ({ ...row, email: String(row.email || row.recipient_email || "").toLowerCase() })), "email");
+  const suppressionsByEmail = groupBy(suppressions.map((row) => ({ ...row, email: String(row.email_address || row.recipient_email || "").toLowerCase() })), "email");
 
   return new Map(brands.map((brand) => {
     const brandLeads = leadsByBrand.get(brand.id) || [];

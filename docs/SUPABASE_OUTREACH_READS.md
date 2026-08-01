@@ -9,7 +9,7 @@ The UI now reads these source-backed objects:
 - `email_sends` filtered by `lead_id`
 - `email_events` filtered by `lead_id`
 - `lead_magnet_events` filtered by `lead_id`
-- `email_suppression_entries` filtered by recipient `email`
+- `email_suppression_entries` filtered by recipient `email_address`
 
 If the Netlify preview shows `Read blocked` for Outreach while the Signals matrix loads, apply the minimum read-only grants/RLS policy for the dashboard role or expose an equivalent read-only view/RPC.
 
