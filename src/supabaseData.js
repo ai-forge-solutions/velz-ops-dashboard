@@ -1,3 +1,4 @@
+import { outreachActionConfiguredMap } from "./conductorApi";
 import { deriveOutreachStatus, QA_LEAD_ID } from "./outreachStatus";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -310,7 +311,8 @@ async function loadOutreachForBrands(brands) {
       events: eventsByLead.get(lead.lead_id) || [],
       magnetEvents: magnetEventsByLead.get(lead.lead_id) || [],
       suppression: activeSuppressionForEmail(suppressionsByEmail, email),
-      launchConfigured: Boolean(import.meta.env.VITE_OUTREACH_ORCHESTRATION_BASE_URL),
+      launchConfigured: Boolean(import.meta.env.VITE_OUTREACH_ORCHESTRATION_BASE_URL || import.meta.env.VITE_OUTREACH_API_BASE_URL),
+      actionConfigured: outreachActionConfiguredMap(),
     })];
   }));
 }
