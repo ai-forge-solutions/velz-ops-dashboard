@@ -11,7 +11,7 @@ The UI now reads these source-backed objects and treats them as the only status 
 - `lead_magnet_events` filtered by `lead_id` (tool visit/click activity)
 - `email_suppression_entries` filtered by recipient `email_address`
 
-Write/action behavior is separate from these browser reads. `Generate sequence`, `Approve`, `Reject`, and `Launch Saleshandy` stay disabled unless Netlify provides explicit internal backend action routes via `VITE_OUTREACH_API_BASE_URL` and `VITE_OUTREACH_*_PATH`. Those calls send only `lead_id` (and optional reject note) so the dashboard does not fabricate lead context or write directly to Supabase/Saleshandy.
+Write/action behavior is separate from these browser reads. `Generate sequence`, `Approve`, `Reject`, and `Launch Saleshandy` stay disabled unless Netlify provides an internal backend base URL via `VITE_OUTREACH_API_BASE_URL` (or the legacy alias `VITE_OUTREACH_ORCHESTRATION_BASE_URL`). The default action routes are the real velz-email-outreach endpoints: `POST /outreach/leads/{lead_id}/sequences/generate`, `POST /outreach/sequences/{sequence_id}/approve`, `POST /outreach/sequences/{sequence_id}/reject`, and `POST /outreach/sequences/{sequence_id}/launch-saleshandy`. Generate uses `lead_id` in the path; approve/reject/launch require `sequence_id` in the path; launch also sends `lead_id` in the body. The dashboard does not fabricate lead context or write directly to Supabase/Saleshandy.
 
 If the Netlify preview shows `Read blocked` for Outreach while the Signals matrix loads, apply the minimum read-only grants/RLS policy for the dashboard role or expose an equivalent read-only view/RPC.
 
