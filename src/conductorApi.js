@@ -1,14 +1,20 @@
 const DEFAULT_CONDUCTOR_BASE_URL =
   "https://velz-signals-conductor-stg.blackocean-de4b65c4.westeurope.azurecontainerapps.io";
-const OUTREACH_ORCHESTRATION_BASE_URL = import.meta.env.VITE_OUTREACH_ORCHESTRATION_BASE_URL;
-const OUTREACH_API_BASE_URL = import.meta.env.VITE_OUTREACH_API_BASE_URL || OUTREACH_ORCHESTRATION_BASE_URL;
-const SALES_HANDY_QA_LAUNCH_PATH = "/orchestration/saleshandy/bulks/qa-single-lead/launch";
+const VITE_ENV = import.meta.env || {};
+const OUTREACH_ORCHESTRATION_BASE_URL = VITE_ENV.VITE_OUTREACH_ORCHESTRATION_BASE_URL;
+const OUTREACH_API_BASE_URL = VITE_ENV.VITE_OUTREACH_API_BASE_URL || OUTREACH_ORCHESTRATION_BASE_URL;
+export const OUTREACH_DEFAULT_ACTION_PATHS = {
+  generate: "/outreach/leads/{lead_id}/sequences/generate",
+  approve: "/outreach/sequences/{sequence_id}/approve",
+  reject: "/outreach/sequences/{sequence_id}/reject",
+  launch: "/outreach/sequences/{sequence_id}/launch-saleshandy",
+};
 
 const OUTREACH_ACTION_PATHS = {
-  generate: import.meta.env.VITE_OUTREACH_GENERATE_SEQUENCE_PATH,
-  approve: import.meta.env.VITE_OUTREACH_APPROVE_SEQUENCE_PATH,
-  reject: import.meta.env.VITE_OUTREACH_REJECT_SEQUENCE_PATH,
-  launch: import.meta.env.VITE_OUTREACH_LAUNCH_SALESHANDY_PATH || SALES_HANDY_QA_LAUNCH_PATH,
+  generate: VITE_ENV.VITE_OUTREACH_GENERATE_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.generate,
+  approve: VITE_ENV.VITE_OUTREACH_APPROVE_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.approve,
+  reject: VITE_ENV.VITE_OUTREACH_REJECT_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.reject,
+  launch: VITE_ENV.VITE_OUTREACH_LAUNCH_SALESHANDY_PATH || OUTREACH_DEFAULT_ACTION_PATHS.launch,
 };
 
 export const CONDUCTOR_ENDPOINTS = {
@@ -24,7 +30,7 @@ export function conductorServiceAvailable(serviceKey) {
 }
 
 function conductorBaseUrl() {
-  return (import.meta.env.VITE_CONDUCTOR_BASE_URL || DEFAULT_CONDUCTOR_BASE_URL).replace(/\/$/, "");
+  return (VITE_ENV.VITE_CONDUCTOR_BASE_URL || DEFAULT_CONDUCTOR_BASE_URL).replace(/\/$/, "");
 }
 
 function outreachApiBaseUrl() {
@@ -77,27 +83,38 @@ async function conductorGet(path) {
   return conductorRequest(path, { method: "GET" });
 }
 
-function interpolateLeadPath(path, leadId) {
+function interpolateOutreachPath(path, { leadId, sequenceId }) {
   return path
-    .replace(/:leadId/g, encodeURIComponent(leadId))
-    .replace(/\{lead_id\}/g, encodeURIComponent(leadId))
-    .replace(/\{leadId\}/g, encodeURIComponent(leadId));
+    .replace(/:leadId/g, encodeURIComponent(leadId || ""))
+    .replace(/\{lead_id\}/g, encodeURIComponent(leadId || ""))
+    .replace(/\{leadId\}/g, encodeURIComponent(leadId || ""))
+    .replace(/:sequenceId/g, encodeURIComponent(sequenceId || ""))
+    .replace(/\{sequence_id\}/g, encodeURIComponent(sequenceId || ""))
+    .replace(/\{sequenceId\}/g, encodeURIComponent(sequenceId || ""));
 }
 
-async function outreachPost(action, { leadId, body = {} }) {
+export function buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId } = {}) {
+  const path = OUTREACH_ACTION_PATHS[action];
+  if (!baseUrl || !path) return null;
+  if (path.match(/(:leadId|\{lead_?id\})/) && !leadId) throw new Error(`Falta lead_id para Outreach ${action}.`);
+  if (path.match(/(:sequenceId|\{sequence_?id\})/) && !sequenceId) throw new Error(`Falta sequence_id para Outreach ${action}.`);
+  return `${baseUrl.replace(/\/$/, "")}${interpolateOutreachPath(path, { leadId, sequenceId })}`;
+}
+
+async function outreachPost(action, { leadId, sequenceId, body = {} }) {
   const baseUrl = outreachApiBaseUrl();
   const path = OUTREACH_ACTION_PATHS[action];
   if (!baseUrl || !path) {
-    throw new Error(`Endpoint Outreach ${action} no configurado. Define VITE_OUTREACH_API_BASE_URL y la ruta VITE_OUTREACH_${action.toUpperCase()}_SEQUENCE_PATH cuando el backend esté desplegado.`);
+    throw new Error(`Endpoint Outreach ${action} no configurado. Define VITE_OUTREACH_API_BASE_URL; las rutas reales de Outreach tienen defaults seguros.`);
   }
 
-  const response = await fetch(`${baseUrl}${interpolateLeadPath(path, leadId)}`, {
+  const response = await fetch(buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId }), {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ lead_id: leadId, ...body }),
+    body: JSON.stringify(body),
   });
 
   const text = await response.text();
@@ -152,21 +169,42 @@ export function saleshandyQaLaunchConfigured() {
 }
 
 export async function generateOutreachSequence(leadId) {
-  return outreachPost("generate", { leadId });
-}
-
-export async function approveOutreachSequence(leadId) {
-  return outreachPost("approve", { leadId });
-}
-
-export async function rejectOutreachSequence(leadId, note = "") {
-  return outreachPost("reject", { leadId, body: note ? { note } : {} });
-}
-
-export async function launchSaleshandyQaBulk(leadId = "4768fa1e-21f7-4ff3-a82d-639deec5c4dd") {
-  return outreachPost("launch", {
+  return outreachPost("generate", {
     leadId,
     body: {
+      requested_by: "miguel",
+      mode: "draft",
+      force_regenerate: false,
+    },
+  });
+}
+
+export async function approveOutreachSequence(sequenceId) {
+  return outreachPost("approve", {
+    sequenceId,
+    body: {
+      reviewed_by: "miguel",
+      notes: "Approved from Velz Ops Dashboard.",
+    },
+  });
+}
+
+export async function rejectOutreachSequence(sequenceId, notes = "") {
+  return outreachPost("reject", {
+    sequenceId,
+    body: {
+      reviewed_by: "miguel",
+      ...(notes ? { notes } : {}),
+    },
+  });
+}
+
+export async function launchSaleshandyQaBulk(sequenceId, leadId = "4768fa1e-21f7-4ff3-a82d-639deec5c4dd") {
+  return outreachPost("launch", {
+    sequenceId,
+    leadId,
+    body: {
+      lead_id: leadId,
       requested_by: "miguel",
       allow_pending_review_for_qa: false,
     },
