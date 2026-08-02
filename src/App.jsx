@@ -7,11 +7,14 @@ import {
 import { loadDashboardBrands } from "./supabaseData";
 import {
   conductorServiceAvailable,
+  generateOutreachSequence,
   getMetaAdLibraryRun,
+  launchSaleshandyQaBulk,
   runConductorPipeline,
   runConductorService,
 } from "./conductorApi";
 import BrandDrawer from "./BrandDrawer";
+import { CASCADE_ETL_FILTERS, normalizeCascadeStep, resolveCascadeTargets } from "./cascadeLogic";
 import { deriveOutreachFilters } from "./outreachStatus";
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
@@ -31,6 +34,16 @@ const SERVICES = [
   { key: "brand_context", label: "Contexto (Triage)", deployed: true },
   { key: "drafting", label: "Drafting", deployed: false },
   { key: "export", label: "Export", deployed: false },
+];
+
+const OUTREACH_CASCADE_ACTIONS = [
+  { key: "generate_sequence", type: "outreach", label: "Generar email sequence", deployed: true },
+  { key: "send_sequence", type: "outreach", label: "Enviar email sequence", deployed: true },
+];
+
+const CASCADE_STEP_OPTIONS = [
+  ...SERVICES.filter((service) => service.deployed).map((service) => ({ ...service, type: "etl" })),
+  ...OUTREACH_CASCADE_ACTIONS,
 ];
 
 const WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
@@ -379,6 +392,37 @@ export default function App() {
     }
   }
 
+  async function triggerOutreachGenerate(brand) {
+    const leadId = brand?.outreach?.leadId;
+    if (!leadId || !brand?.outreach?.readyToGenerate) {
+      setActionMessage({ tone: "warning", text: `${brand?.name || "Lead"}: no está listo para generar sequence o falta lead_id.` });
+      return;
+    }
+    try {
+      const result = await generateOutreachSequence(leadId);
+      setActionMessage({ tone: "success", text: `${brand.name}: generación de email sequence solicitada${result?.id ? ` · ${result.id}` : ""}.` });
+      await refreshDashboardBrands();
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `${brand?.name || "Lead"}: no se pudo generar la sequence — ${error.message}` });
+    }
+  }
+
+  async function triggerOutreachSend(brand) {
+    const leadId = brand?.outreach?.leadId;
+    const sequenceId = brand?.outreach?.sequence?.id;
+    if (!leadId || !sequenceId || !brand?.outreach?.launchEligible) {
+      setActionMessage({ tone: "warning", text: `${brand?.name || "Lead"}: no está listo para enviar o falta sequence_id/lead_id.` });
+      return;
+    }
+    try {
+      const result = await launchSaleshandyQaBulk(sequenceId, leadId);
+      setActionMessage({ tone: "success", text: `${brand.name}: envío/import Saleshandy solicitado${result?.id ? ` · ${result.id}` : ""}.` });
+      await refreshDashboardBrands();
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `${brand?.name || "Lead"}: no se pudo enviar la sequence — ${error.message}` });
+    }
+  }
+
   const filtered = brands.filter(b =>
     b.name.toLowerCase().includes(search.toLowerCase()) ||
     b.domain.toLowerCase().includes(search.toLowerCase())
@@ -440,6 +484,10 @@ export default function App() {
         <CascadesView
           brands={brands} selected={selected} cascades={cascades} setCascades={setCascades}
           triggerService={triggerService}
+          triggerOutreachGenerate={triggerOutreachGenerate}
+          triggerOutreachSend={triggerOutreachSend}
+          actionMessage={actionMessage}
+          clearActionMessage={() => setActionMessage(null)}
         />
       )}
 
@@ -847,18 +895,21 @@ function OutreachView({ brands, loading, error, openBrandDrawer }) {
 }
 
 // ---------------------------------------------------------------------------
-function CascadesView({ brands, selected, cascades, setCascades, triggerService }) {
+function CascadesView({ brands, selected, cascades, setCascades, triggerService, triggerOutreachGenerate, triggerOutreachSend, actionMessage, clearActionMessage }) {
   const [name, setName] = useState("");
-  const [steps, setSteps] = useState([]); // {key, delay}
-  const [addKey, setAddKey] = useState(SERVICES[0].key);
+  const [steps, setSteps] = useState([]); // {type, key, delay}
+  const [addKey, setAddKey] = useState(CASCADE_STEP_OPTIONS[0].key);
   const [startTime, setStartTime] = useState("09:00");
   const [days, setDays] = useState([0, 1, 2, 3, 4]); // L-V by default
   const [scope, setScope] = useState("all");
   const [fitMin, setFitMin] = useState(80);
+  const [etlStateFilter, setEtlStateFilter] = useState("all");
 
   function addStep() {
     if (steps.some(s => s.key === addKey)) return;
-    setSteps([...steps, { key: addKey, delay: steps.length === 0 ? 0 : 15 }]);
+    const option = CASCADE_STEP_OPTIONS.find((item) => item.key === addKey);
+    if (!option) return;
+    setSteps([...steps, { type: option.type, key: option.key, delay: steps.length === 0 ? 0 : 15 }]);
   }
   function removeStep(i) { setSteps(steps.filter((_, idx) => idx !== i)); }
   function move(i, dir) {
@@ -877,29 +928,48 @@ function CascadesView({ brands, selected, cascades, setCascades, triggerService 
     const scopeBrandIds = scope === "selected" ? Array.from(selected) : null;
     setCascades([...cascades, {
       id: Date.now().toString(), name, steps, startTime, days: [...days],
-      scope, fitMin, scopeBrandIds, enabled: true,
+      scope, fitMin, etlStateFilter, scopeBrandIds, enabled: true,
     }]);
     setName(""); setSteps([]);
   }
 
+  function runCascadeStep(brand, step) {
+    const normalized = normalizeCascadeStep(step);
+    if (normalized.type === "outreach" && normalized.key === "generate_sequence") return triggerOutreachGenerate(brand);
+    if (normalized.type === "outreach" && normalized.key === "send_sequence") return triggerOutreachSend(brand);
+    return triggerService(brand.id, normalized.key);
+  }
+
   function runNow(cascade) {
-    const targets = cascade.scope === "all" ? brands
-      : cascade.scope === "fit_score" ? brands.filter(b => b.fit >= cascade.fitMin)
-      : brands.filter(b => (cascade.scopeBrandIds || []).includes(b.id));
+    const targets = resolveCascadeTargets({ brands, selectedIds: selected, cascade, services: SERVICES });
     let cumMs = 0;
     cascade.steps.forEach(step => {
-      cumMs += step.delay * 60 * 1000 * 0.001; // scaled down for demo (min -> ~ms)
-      setTimeout(() => targets.forEach(b => triggerService(b.id, step.key)), cumMs);
+      cumMs += (step.delay || 0) * 60 * 1000 * 0.001; // scaled down for demo (min -> ~ms)
+      setTimeout(() => targets.forEach(b => runCascadeStep(b, step)), cumMs);
     });
   }
 
-  const availableToAdd = SERVICES.filter(s => s.deployed && !steps.some(st => st.key === s.key));
+  const availableToAdd = CASCADE_STEP_OPTIONS.filter(s => !steps.some(st => st.key === s.key));
 
   return (
     <div className="grid grid-cols-1 gap-5 px-4 py-4 sm:grid-cols-2 sm:gap-6 sm:px-6 sm:py-5">
       {/* Builder */}
       <div className="rounded-md p-4" style={{ border: `1px solid ${COLORS.line}` }}>
         <h3 className="font-medium mb-3">Nueva cascada</h3>
+
+        {actionMessage && (
+          <div
+            className="mb-4 flex items-start justify-between gap-3 rounded-md px-3 py-2 text-xs"
+            style={{
+              border: `1px solid ${actionMessage.tone === "error" ? COLORS.red : actionMessage.tone === "warning" ? COLORS.amber : COLORS.green}`,
+              color: actionMessage.tone === "error" ? COLORS.red : actionMessage.tone === "warning" ? COLORS.amber : COLORS.green,
+              background: "#fff",
+            }}
+          >
+            <span>{actionMessage.text}</span>
+            <button onClick={clearActionMessage} className="mono text-[10px] uppercase">cerrar</button>
+          </div>
+        )}
 
         <label className="block text-[11px] mb-1" style={{ color: COLORS.muted }}>Nombre</label>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="p.ej. Ronda diaria fit≥80"
@@ -908,11 +978,11 @@ function CascadesView({ brands, selected, cascades, setCascades, triggerService 
         <label className="block text-[11px] mb-1" style={{ color: COLORS.muted }}>Pasos (orden + delay)</label>
         <div className="space-y-1.5 mb-2">
           {steps.map((st, i) => {
-            const svc = SERVICES.find(s => s.key === st.key);
+            const svc = CASCADE_STEP_OPTIONS.find(s => s.key === st.key) || normalizeCascadeStep(st);
             return (
               <div key={st.key} className="flex items-center gap-2 px-2 py-1.5 rounded" style={{ background: "#FAFAF8" }}>
                 <span className="mono text-[10px] w-4" style={{ color: COLORS.muted }}>{i + 1}</span>
-                <span className="text-xs flex-1">{svc.label}</span>
+                <span className="text-xs flex-1">{svc.label || st.key}</span>
                 {i > 0 && (
                   <div className="flex items-center gap-1">
                     <span className="text-[10px]" style={{ color: COLORS.muted }}>+</span>
@@ -949,7 +1019,7 @@ function CascadesView({ brands, selected, cascades, setCascades, triggerService 
                 <g key={st.key}>
                   <circle cx={10 + i * 90} cy="20" r="5" fill={COLORS.ink} />
                   <text x={10 + i * 90} y="34" fontSize="9" textAnchor="middle" fill={COLORS.muted} fontFamily="IBM Plex Mono">
-                    {SERVICES.find(s => s.key === st.key).label.slice(0, 10)}
+                    {CASCADE_STEP_OPTIONS.find(s => s.key === st.key)?.label?.slice(0, 10) || st.key.slice(0, 10)}
                   </text>
                   {i > 0 && (
                     <text x={10 + (i - 0.5) * 90} y="12" fontSize="9" textAnchor="middle" fill={COLORS.muted} fontFamily="IBM Plex Mono">
@@ -990,6 +1060,16 @@ function CascadesView({ brands, selected, cascades, setCascades, triggerService 
           </label>
         </div>
 
+        <label className="block text-[11px] mb-1 mt-3" style={{ color: COLORS.muted }}>Estado ETL</label>
+        <select value={etlStateFilter} onChange={e => setEtlStateFilter(e.target.value)} className="mb-4 w-full px-2 py-1.5 rounded text-xs" style={{ border: `1px solid ${COLORS.line}` }}>
+          {CASCADE_ETL_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+        </select>
+
+        <div className="mb-4 flex items-start gap-1.5 text-[11px]" style={{ color: COLORS.muted }}>
+          <Info size={13} className="mt-0.5 shrink-0" />
+          <span>Las cascadas pueden mezclar pasos ETL con generación y envío de email sequences. Requiere <span className="mono">VITE_OUTREACH_API_BASE_URL</span>; las rutas por defecto cubren generate y launch Saleshandy.</span>
+        </div>
+
         <button onClick={save} disabled={!name.trim() || steps.length === 0}
           className="w-full py-2 rounded text-xs font-medium" style={{ background: (!name.trim() || steps.length === 0) ? COLORS.line : COLORS.green, color: "#fff" }}>
           Guardar cascada
@@ -1020,6 +1100,7 @@ function CascadeCard({ cascade, onRun, onToggle, onDelete }) {
   const scopeLabel = cascade.scope === "all" ? "todas las marcas"
     : cascade.scope === "fit_score" ? `fit ≥ ${cascade.fitMin}`
     : `${(cascade.scopeBrandIds || []).length} seleccionadas`;
+  const etlFilterLabel = CASCADE_ETL_FILTERS.find((item) => item.key === (cascade.etlStateFilter || "all"))?.label;
   return (
     <div className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}`, opacity: cascade.enabled ? 1 : 0.5 }}>
       <div className="flex items-center justify-between mb-1.5">
@@ -1034,13 +1115,14 @@ function CascadeCard({ cascade, onRun, onToggle, onDelete }) {
         {cascade.steps.map((s, i) => (
           <span key={s.key} className="flex items-center gap-1">
             {i > 0 && <ChevronRight size={10} />}
-            <span className="mono">{SERVICES.find(x => x.key === s.key)?.label}</span>
+            <span className="mono">{CASCADE_STEP_OPTIONS.find(x => x.key === s.key)?.label || s.key}</span>
           </span>
         ))}
       </div>
       <div className="flex items-center gap-3 mt-2 text-[10px] mono" style={{ color: COLORS.muted }}>
         <span className="flex items-center gap-1"><CalendarClock size={11} /> {cascade.startTime} · {cascade.days.map(d => WEEKDAYS[d]).join("")}</span>
         <span className="flex items-center gap-1"><Users size={11} /> {scopeLabel}</span>
+        <span>{etlFilterLabel}</span>
       </div>
     </div>
   );
