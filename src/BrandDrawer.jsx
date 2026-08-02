@@ -13,7 +13,13 @@ import {
   X,
 } from "lucide-react";
 import { loadBrandSource } from "./supabaseData";
-import { launchSaleshandyQaBulk, saleshandyQaLaunchConfigured } from "./conductorApi";
+import {
+  approveOutreachSequence,
+  generateOutreachSequence,
+  launchSaleshandyQaBulk,
+  rejectOutreachSequence,
+  saleshandyQaLaunchConfigured,
+} from "./conductorApi";
 import {
   COLORS,
   VERIFICATION_SERVICES,
@@ -99,6 +105,72 @@ function KeyValue({ label, value, href }) {
   );
 }
 
+function ActionResult({ result }) {
+  if (!result) return null;
+  return (
+    <div className="mt-3 rounded-md p-3 text-xs" style={{ background: COLORS.wash, border: `1px solid ${COLORS.line}` }}>
+      <h4 className="mb-2 font-medium">Respuesta backend</h4>
+      <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words mono text-[10px]" style={{ color: COLORS.muted }}>{JSON.stringify(result, null, 2)}</pre>
+    </div>
+  );
+}
+
+function JourneyIndicator({ steps = [] }) {
+  if (!steps.length) return null;
+  const toneFor = (status) => status === "done" ? COLORS.green : status === "current" ? COLORS.amber : status === "blocked" ? COLORS.red : COLORS.line;
+  return (
+    <div className="grid grid-cols-5 gap-1 text-[10px]">
+      {steps.map((step) => (
+        <div key={step.key} className="rounded-md px-2 py-2 text-center" style={{ border: `1px solid ${toneFor(step.status)}55`, background: `${toneFor(step.status)}12`, color: step.status === "pending" ? COLORS.muted : toneFor(step.status) }}>
+          <div className="mono uppercase tracking-wide">{step.label}</div>
+          <div className="mt-1">{step.status}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SequencePreview({ sequence }) {
+  if (!sequence) return <EmptyState>No hay draft de secuencia source-backed para este lead todavía.</EmptyState>;
+  const followups = Array.isArray(sequence.followups) ? sequence.followups : [];
+  const metadata = sequence.source_metadata || sequence.metadata || {};
+  const evidence = metadata.evidence_summary || metadata.evidence_sources || sequence.source_refs || sequence.evidence_refs;
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md p-3" style={{ background: COLORS.wash }}>
+        <div className="mb-1 text-[11px] font-medium">Subject</div>
+        <div>{sequence.subject || "—"}</div>
+      </div>
+      <div className="rounded-md p-3" style={{ background: COLORS.wash }}>
+        <div className="mb-1 text-[11px] font-medium">Initial email body</div>
+        <p className="whitespace-pre-line leading-5">{sequence.initial_email || sequence.body || "—"}</p>
+      </div>
+      <div className="space-y-2">
+        <div className="text-[11px] font-medium">Followups</div>
+        {followups.length === 0 ? <EmptyState>No hay followups en el read model.</EmptyState> : followups.map((followup, index) => (
+          <div key={index} className="rounded-md p-3" style={{ background: COLORS.wash }}>
+            <div className="font-medium">{followup.subject || `Followup ${followup.step || index + 1}`}</div>
+            <p className="mt-1 whitespace-pre-line leading-5" style={{ color: COLORS.muted }}>{followup.body || followup.email || "—"}</p>
+          </div>
+        ))}
+      </div>
+      <div className="rounded-md p-3" style={{ background: COLORS.wash }}>
+        <div className="mb-1 text-[11px] font-medium">Source-backed evidence</div>
+        <p className="whitespace-pre-line mono text-[10px]" style={{ color: COLORS.muted }}>{typeof evidence === "string" ? evidence : evidence ? JSON.stringify(evidence, null, 2) : "No evidence summary exposed in current read model."}</p>
+      </div>
+    </div>
+  );
+}
+
+function KeyValueList({ title, values }) {
+  return (
+    <section className="rounded-md p-3" style={{ background: COLORS.wash }}>
+      <h4 className="mb-2 font-medium">{title}</h4>
+      <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">{values.map(([label, value, href]) => <KeyValue key={label} label={label} value={value} href={href} />)}</dl>
+    </section>
+  );
+}
+
 function LaunchResult({ result }) {
   if (!result) return null;
   const sendIds = Array.isArray(result.email_send_ids) ? result.email_send_ids.join(", ") : result.email_send_ids;
@@ -120,30 +192,36 @@ function LaunchResult({ result }) {
 function OutreachSection({ brand, onRefresh }) {
   const outreach = brand.outreach;
   const [confirming, setConfirming] = useState(false);
-  const [launching, setLaunching] = useState(false);
-  const [launchResult, setLaunchResult] = useState(null);
-  const [launchError, setLaunchError] = useState(null);
+  const [busyAction, setBusyAction] = useState(null);
+  const [actionResult, setActionResult] = useState(null);
+  const [actionError, setActionError] = useState(null);
+  const [rejectNote, setRejectNote] = useState("");
   const configured = saleshandyQaLaunchConfigured();
   const tone = outreachTone(outreach);
   const sequence = outreach?.sequence;
   const send = outreach?.send;
   const provider = outreach?.provider || {};
+  const actionConfigured = outreach?.actionConfigured || {};
   const events = Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const magnetEvents = Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
-  const canLaunch = Boolean(outreach?.launchEligible && configured);
+  const canGenerate = Boolean(outreach?.readyToGenerate && actionConfigured.generate && !outreach?.blockers?.length);
+  const canApprove = Boolean(outreach?.canApprove && actionConfigured.approve && sequence && !outreach?.blockers?.length);
+  const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequence);
+  const canLaunch = Boolean(outreach?.launchEligible && configured && !outreach?.blockers?.length);
 
-  async function runLaunch() {
-    setLaunching(true);
-    setLaunchError(null);
+  async function runAction(action, handler) {
+    setBusyAction(action);
+    setActionError(null);
+    setActionResult(null);
     try {
-      const result = await launchSaleshandyQaBulk();
-      setLaunchResult(result || {});
-      setConfirming(false);
+      const result = await handler();
+      setActionResult(result || { ok: true });
+      if (action === "launch") setConfirming(false);
       await onRefresh?.();
     } catch (error) {
-      setLaunchError(error);
+      setActionError(error);
     } finally {
-      setLaunching(false);
+      setBusyAction(null);
     }
   }
 
@@ -152,10 +230,10 @@ function OutreachSection({ brand, onRefresh }) {
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <h3 className="font-medium">Outreach</h3>
-          <p className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>Sequence readiness, Saleshandy lifecycle, provider IDs and engagement evidence.</p>
+          <p className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>Readiness → Generate sequence → Review/Approve → Launch Saleshandy → Engagement. Actions call backend by lead_id only when the backend contract is configured.</p>
         </div>
         <div className="flex flex-col items-end gap-1">
-          <OutreachPill tone={tone}>{outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "No sequence")}</OutreachPill>
+          <OutreachPill tone={tone}>{outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "Not ready")}</OutreachPill>
           <OutreachPill tone={tone}>{outreach?.lifecycle?.label || "Not launched"}</OutreachPill>
         </div>
       </div>
@@ -165,54 +243,99 @@ function OutreachSection({ brand, onRefresh }) {
 
       {outreach && (
         <div className="space-y-4 text-xs">
+          <JourneyIndicator steps={outreach.journey} />
           {outreach.suppression && <EmptyState tone={COLORS.red}>Suppression activa: {outreach.suppression.reason || outreach.suppression.type || "sin motivo"}. No enviar.</EmptyState>}
-          {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos visibles: {outreach.blockers.join(" · ")}</EmptyState>}
-          <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <KeyValue label="recipient" value={outreach.email} />
-            <KeyValue label="lead_id" value={outreach.leadId} />
-            <KeyValue label="subject" value={sequence?.subject} />
-            <KeyValue label="tool_key" value={sequence?.tool_key || outreach.lead?.tool_key} />
-            <KeyValue label="public tool URL" value={outreach.toolUrl} href={outreach.toolUrl} />
-            <KeyValue label="sequence status" value={sequence?.status || sequence?.readiness_status} />
-            <KeyValue label="review_status" value={sequence?.review_status} />
-            <KeyValue label="send_status" value={sequence?.send_status} />
-            <KeyValue label="latest email_sends.status" value={send?.status || send?.send_status} />
-            <KeyValue label="send_mode" value={send?.send_mode} />
-            <KeyValue label="provider_sequence_id" value={provider.provider_sequence_id} />
-            <KeyValue label="provider_prospect_id" value={provider.provider_prospect_id} />
-            <KeyValue label="provider_import_request_id" value={provider.provider_import_request_id} />
-            <KeyValue label="provider_import_status" value={provider.provider_import_status} />
-            <KeyValue label="last provider sync" value={fmtTime(provider.last_provider_sync_at)} />
-            <KeyValue label="sent_at" value={fmtTime(send?.sent_at)} />
-            <KeyValue label="latest engagement" value={events || "sin eventos"} />
-            <KeyValue label="latest tool activity" value={magnetEvents || "sin actividad"} />
-          </dl>
+          {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
           <EmptyState tone={outreach.blockers?.length ? COLORS.amber : COLORS.green}>Siguiente acción: {outreach.nextAction?.label}</EmptyState>
+
+          <KeyValueList title="Readiness checks" values={[
+            ["recipient", outreach.email],
+            ["lead_id", outreach.leadId],
+            ["tool_key", sequence?.tool_key || outreach.lead?.tool_key],
+            ["public tool URL", outreach.toolUrl, outreach.toolUrl],
+            ["ready_to_generate", outreach.readyToGenerate ? "true" : "false"],
+            ["blockers", outreach.blockers?.join(" · ") || "—"],
+          ]} />
+
+          <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h4 className="font-medium">Generate sequence</h4>
+              <button onClick={() => runAction("generate", () => generateOutreachSequence(outreach.leadId))} disabled={!canGenerate || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canGenerate ? COLORS.ink : COLORS.line, color: canGenerate ? "#fff" : COLORS.muted }}>
+                {busyAction === "generate" ? "Generating…" : "Generate sequence"}
+              </button>
+            </div>
+            {!actionConfigured.generate && <EmptyState>Generate disabled: backend generate endpoint/path is not configured yet. UI stays read-only until the companion backend exposes the contract.</EmptyState>}
+            {actionConfigured.generate && !outreach.readyToGenerate && <EmptyState>Generate hidden by backend state: lead is not ready_to_generate.</EmptyState>}
+          </section>
+
+          <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h4 className="font-medium">Sequence draft / review</h4>
+              <OutreachPill tone={tone}>{sequence?.review_status || outreach.readiness?.label}</OutreachPill>
+            </div>
+            <SequencePreview sequence={sequence} />
+            <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+              <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
+              <button onClick={() => runAction("reject", () => rejectOutreachSequence(outreach.leadId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
+                {busyAction === "reject" ? "Rejecting…" : "Reject / needs changes"}
+              </button>
+              <button onClick={() => runAction("approve", () => approveOutreachSequence(outreach.leadId))} disabled={!canApprove || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canApprove ? COLORS.green : COLORS.line, color: canApprove ? "#fff" : COLORS.muted }}>
+                {busyAction === "approve" ? "Approving…" : "Approve sequence"}
+              </button>
+            </div>
+            <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Approval only changes backend review state; it does not send email. Approve/reject controls remain disabled until configured backend endpoints are available.</p>
+          </section>
+
+          <KeyValueList title="Saleshandy / provider lifecycle" values={[
+            ["sequence status", sequence?.status || sequence?.readiness_status],
+            ["review_status", sequence?.review_status],
+            ["send_status", sequence?.send_status],
+            ["latest email_sends.status", send?.status || send?.send_status],
+            ["send_mode", send?.send_mode],
+            ["provider_sequence_id", provider.provider_sequence_id],
+            ["provider_prospect_id", provider.provider_prospect_id],
+            ["provider_import_request_id", provider.provider_import_request_id],
+            ["provider_import_status", provider.provider_import_status],
+            ["last provider sync", fmtTime(provider.last_provider_sync_at)],
+            ["sent_at", fmtTime(send?.sent_at)],
+          ]} />
+
           <div>
-            <button onClick={() => setConfirming(true)} disabled={!canLaunch} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canLaunch ? COLORS.green : COLORS.line, color: canLaunch ? "#fff" : COLORS.muted }}>
-              Launch Saleshandy QA bulk
+            <button onClick={() => setConfirming(true)} disabled={!canLaunch || busyAction} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canLaunch ? COLORS.green : COLORS.line, color: canLaunch ? "#fff" : COLORS.muted }}>
+              Launch Saleshandy
             </button>
-            {!configured && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: falta configurar VITE_OUTREACH_ORCHESTRATION_BASE_URL. El panel queda en modo read-only tracking.</p>}
-            {configured && !outreach.launchEligible && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: solo aparece para el lead QA, recipient Miguel, secuencia + tool URL existentes y sin suppression.</p>}
+            {!configured && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: falta configurar VITE_OUTREACH_API_BASE_URL/VITE_OUTREACH_ORCHESTRATION_BASE_URL y ruta de launch. No hay llamadas directas a Saleshandy desde el browser.</p>}
+            {configured && !outreach.launchEligible && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada por el read model: launch solo aparece cuando backend marca launch-ready y no hay estado final/bloqueado.</p>}
           </div>
-          {launchError && <EmptyState tone={COLORS.red}>No se pudo lanzar QA: {launchError.message}</EmptyState>}
-          <LaunchResult result={launchResult} />
+
+          <KeyValueList title="Engagement / tool activity" values={[
+            ["email events", events || "sin eventos"],
+            ["latest email event", fmtTime(outreach.events?.latestEvent?.event_at || outreach.events?.latestEvent?.created_at)],
+            ["tool activity", magnetEvents || "sin actividad"],
+            ["latest tool event", fmtTime(outreach.magnetEvents?.latestEvent?.event_at || outreach.magnetEvents?.latestEvent?.created_at)],
+            ["fallback limitation", "Provider import/enrollment, sent/open/click/reply, and tool visits are separate evidence streams; absent webhook/polling events are shown as unknown, not inferred."],
+          ]} />
+
+          {actionError && <EmptyState tone={COLORS.red}>Backend action failed: {actionError.message}</EmptyState>}
+          {actionResult?.bulk_run_id ? <LaunchResult result={actionResult} /> : <ActionResult result={actionResult} />}
         </div>
       )}
 
       {confirming && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
           <div className="max-w-lg rounded-lg p-5 shadow-2xl" style={{ background: COLORS.paper, border: `1px solid ${COLORS.line}` }}>
-            <h3 className="mb-2 text-base font-medium">Confirmar launch Saleshandy QA real</h3>
-            <p className="mb-3 text-xs leading-5" style={{ color: COLORS.muted }}>Esto llama al orquestador interno y puede crear/importar un prospect real en Saleshandy. Es QA-only, no scale-up bulk.</p>
+            <h3 className="mb-2 text-base font-medium">Confirmar launch Saleshandy real</h3>
+            <p className="mb-3 text-xs leading-5" style={{ color: COLORS.muted }}>Esto llama al backend de Outreach y puede crear/importar un prospect real en Saleshandy. No es una llamada browser → Saleshandy; conserva guardrails backend, QA/non-QA y idempotencia.</p>
             <dl className="mb-4 grid gap-2 text-xs">
               <KeyValue label="recipient" value={outreach?.email} />
+              <KeyValue label="lead_id" value={outreach?.leadId} />
               <KeyValue label="subject" value={sequence?.subject} />
               <KeyValue label="tool URL" value={outreach?.toolUrl} href={outreach?.toolUrl} />
+              <KeyValue label="provider_sequence_id" value={provider.provider_sequence_id} />
             </dl>
             <div className="flex justify-end gap-2">
               <button onClick={() => setConfirming(false)} className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }}>Cancelar</button>
-              <button onClick={runLaunch} disabled={launching} className="rounded px-3 py-2 text-xs font-medium" style={{ background: COLORS.green, color: "#fff" }}>{launching ? "Lanzando…" : "Confirmar QA launch"}</button>
+              <button onClick={() => runAction("launch", () => launchSaleshandyQaBulk(outreach.leadId))} disabled={busyAction === "launch"} className="rounded px-3 py-2 text-xs font-medium" style={{ background: COLORS.green, color: "#fff" }}>{busyAction === "launch" ? "Launching…" : "Confirmar launch"}</button>
             </div>
           </div>
         </div>

@@ -47,7 +47,7 @@ const pendingDryRun = deriveOutreachStatus({
   suppression: null,
 });
 assert.equal(pendingDryRun.readiness.key, "pending_review");
-assert.equal(pendingDryRun.readiness.label, "Pending review");
+assert.equal(pendingDryRun.readiness.label, "Draft pending review");
 assert.equal(pendingDryRun.lifecycle.key, "not_launched");
 assert.equal(pendingDryRun.lifecycle.label, "Not launched");
 assert.match(pendingDryRun.nextAction.label, /review/i);
@@ -75,6 +75,39 @@ const delivered = deriveOutreachStatus({
 assert.equal(delivered.lifecycle.key, "opened");
 assert.equal(delivered.lifecycle.label, "Opened");
 assert.equal(delivered.provider.provider_sequence_id, "7pzV9Yv4ab");
+assert.deepEqual(delivered.journey.map((step) => step.key), ["readiness", "sequence", "review", "saleshandy", "engagement"]);
+
+const readyToGenerate = deriveOutreachStatus({
+  leadId: "lead-ready",
+  lead: {
+    primary_email: "buyer@example.com",
+    ready_to_generate: true,
+    outreach_blockers: [],
+  },
+  sequence: null,
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { generate: true },
+});
+assert.equal(readyToGenerate.readiness.key, "ready_to_generate");
+assert.equal(readyToGenerate.readiness.label, "Ready to generate");
+assert.equal(readyToGenerate.nextAction.key, "generate");
+assert.equal(readyToGenerate.readyToGenerate, true);
+
+const launchReady = deriveOutreachStatus({
+  leadId: qaLeadId,
+  lead: { primary_email: "miguelcarmonar@gmail.com" },
+  sequence: { ...baseSequence, review_status: "approved", status: "ready", launch_ready: true },
+  send: { status: "planned" },
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { launch: true },
+});
+assert.equal(launchReady.launchEligible, true);
+assert.equal(launchReady.nextAction.key, "launch");
 
 const suppressed = deriveOutreachStatus({
   leadId: qaLeadId,

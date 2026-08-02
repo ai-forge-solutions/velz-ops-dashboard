@@ -117,6 +117,18 @@ function OutreachBadge({ value, tone = "muted" }) {
   );
 }
 
+function OutreachJourneyMini({ steps = [] }) {
+  if (!steps.length) return null;
+  const colorFor = (status) => status === "done" ? COLORS.green : status === "current" ? COLORS.amber : status === "blocked" ? COLORS.red : COLORS.line;
+  return (
+    <div className="mt-1 flex items-center gap-0.5" title="Readiness → Sequence → Review → Saleshandy → Engagement">
+      {steps.map((step) => (
+        <span key={step.key} className="h-1.5 w-5 rounded-full" style={{ background: colorFor(step.status) }} />
+      ))}
+    </div>
+  );
+}
+
 function outreachTone(outreach) {
   if (!outreach) return "muted";
   if (outreach.lifecycle?.key === "suppressed" || outreach.lifecycle?.key === "failed" || outreach.readiness?.key === "blocked") return "red";
@@ -133,6 +145,7 @@ function OutreachStatusCell({ outreach, error }) {
     <div className="flex flex-col items-start gap-1">
       <OutreachBadge value={outreach.readiness?.label} tone={tone} />
       <OutreachBadge value={outreach.lifecycle?.label} tone={tone} />
+      <OutreachJourneyMini steps={outreach.journey} />
     </div>
   );
 }
@@ -758,6 +771,7 @@ function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
 // ---------------------------------------------------------------------------
 const OUTREACH_FILTERS = [
   { key: "all", label: "Todos" },
+  { key: "ready_to_generate", label: "Ready to generate" },
   { key: "needs_review", label: "Needs review" },
   { key: "ready_to_launch", label: "Ready to launch" },
   { key: "launched", label: "Launched" },
@@ -806,7 +820,12 @@ function OutreachView({ brands, loading, error, openBrandDrawer }) {
                       <div className="mono text-[11px]" style={{ color: COLORS.muted }}>{outreach?.leadId || "sin lead"} · {outreach?.email || brand.domain}</div>
                     </button>
                   </td>
-                  <td className="px-3 py-3 align-top"><OutreachBadge value={outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "No sequence")} tone={brand.outreachLoadError ? "amber" : tone} /></td>
+                  <td className="px-3 py-3 align-top">
+                    <div className="flex flex-col items-start gap-1">
+                      <OutreachBadge value={outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "Not ready")} tone={brand.outreachLoadError ? "amber" : tone} />
+                      <OutreachJourneyMini steps={outreach?.journey} />
+                    </div>
+                  </td>
                   <td className="px-3 py-3 align-top"><OutreachBadge value={outreach?.lifecycle?.label || "Not launched"} tone={tone} /></td>
                   <td className="px-3 py-3 align-top mono text-[11px]" style={{ color: COLORS.muted }}>
                     <div>sequence: {outreach?.provider?.provider_sequence_id || "—"}</div>
