@@ -10,7 +10,7 @@ Panel operativo diario del pipeline de Velz Auto-Outreach: marcas (filas) × mic
 npm install
 cp .env.example .env.local
 # rellena VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY y VITE_CONDUCTOR_BASE_URL
-# opcional: VITE_OUTREACH_API_BASE_URL + rutas VITE_OUTREACH_* habilitan generate/approve/reject/launch
+# opcional: VITE_OUTREACH_API_BASE_URL habilita generate/approve/reject/launch con rutas reales por defecto
 npm run dev
 ```
 
@@ -20,9 +20,9 @@ La app necesita una `anon key` de Supabase con políticas RLS de solo lectura pa
 
 El dashboard carga una segunda capa operativa de Outreach desde Supabase: `v_lead_overview`, `email_sequences`, `email_sends`, `email_events`, `lead_magnet_events` y `email_suppression_entries`. Si esas lecturas no están concedidas a anon, la matriz de señales sigue cargando y Outreach muestra `Read blocked`; ver `docs/SUPABASE_OUTREACH_READS.md` para el SQL mínimo de lectura.
 
-La UI muestra el journey `Readiness → Sequence → Review → Saleshandy → Engagement` con estados reales del read model/Supabase: `Not ready`, `Ready to generate`, `Draft pending review`, `Approved`, `Launch ready`, `Launch submitted`, `Imported/enrolled`, `Sent`, `Opened`, `Clicked`, `Replied`, `Failed` y `Suppressed`. Las acciones `Generate sequence`, `Approve`, `Reject` y `Launch Saleshandy` permanecen desactivadas hasta que el backend publique rutas explícitas configuradas con `VITE_OUTREACH_API_BASE_URL` y `VITE_OUTREACH_GENERATE_SEQUENCE_PATH` / `VITE_OUTREACH_APPROVE_SEQUENCE_PATH` / `VITE_OUTREACH_REJECT_SEQUENCE_PATH` / `VITE_OUTREACH_LAUNCH_SALESHANDY_PATH`. Cada acción envía solo `{ lead_id }` (y nota opcional de reject); no pasa contexto inventado desde el browser.
+La UI muestra el journey `Readiness → Sequence → Review → Saleshandy → Engagement` con estados reales del read model/Supabase: `Not ready`, `Ready to generate`, `Draft pending review`, `Approved`, `Launch ready`, `Launch submitted`, `Imported/enrolled`, `Sent`, `Opened`, `Clicked`, `Replied`, `Failed` y `Suppressed`. Las acciones `Generate sequence`, `Approve`, `Reject` y `Launch Saleshandy` permanecen desactivadas hasta que haya una base configurada con `VITE_OUTREACH_API_BASE_URL` (o el alias legacy `VITE_OUTREACH_ORCHESTRATION_BASE_URL`). Con solo esa base, la app usa defaults reales: `POST /outreach/leads/{lead_id}/sequences/generate`, `POST /outreach/sequences/{sequence_id}/approve`, `POST /outreach/sequences/{sequence_id}/reject` y `POST /outreach/sequences/{sequence_id}/launch-saleshandy`. Generate envía `{ requested_by, mode, force_regenerate }`; approve/reject usan `sequence_id` y envían `{ reviewed_by, notes }`; launch usa `sequence_id` en path y `{ lead_id, requested_by, allow_pending_review_for_qa }` en body.
 
-El botón `Launch Saleshandy` solo aparece cuando el read model marca el lead como launch-ready y no hay estado final/bloqueado. La app llama únicamente al endpoint interno configurado; no llama Saleshandy desde el navegador. El path QA heredado `/orchestration/saleshandy/bulks/qa-single-lead/launch` sigue soportado como default para `VITE_OUTREACH_LAUNCH_SALESHANDY_PATH`.
+El botón `Launch Saleshandy` solo aparece cuando el read model marca el lead como launch-ready, expone `sequence_id` y no hay estado final/bloqueado. La app llama únicamente al endpoint interno configurado; no llama Saleshandy desde el navegador. El path QA heredado `/orchestration/saleshandy/bulks/qa-single-lead/launch` queda deprecado: solo se usa si se fuerza explícitamente con `VITE_OUTREACH_LAUNCH_SALESHANDY_PATH`.
 
 ## Límite visual de Meta Ads
 

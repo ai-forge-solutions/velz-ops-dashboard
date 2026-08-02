@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import {
+  OUTREACH_DEFAULT_ACTION_PATHS,
+  buildOutreachActionUrl,
+} from "../src/conductorApi.js";
+import {
   deriveOutreachFilters,
   deriveOutreachStatus,
   latestByTimestamp,
@@ -7,6 +11,30 @@ import {
 } from "../src/outreachStatus.js";
 
 const qaLeadId = "4768fa1e-21f7-4ff3-a82d-639deec5c4dd";
+
+assert.deepEqual(OUTREACH_DEFAULT_ACTION_PATHS, {
+  generate: "/outreach/leads/{lead_id}/sequences/generate",
+  approve: "/outreach/sequences/{sequence_id}/approve",
+  reject: "/outreach/sequences/{sequence_id}/reject",
+  launch: "/outreach/sequences/{sequence_id}/launch-saleshandy",
+});
+assert.equal(
+  buildOutreachActionUrl("https://outreach.example.com/", "generate", { leadId: "lead 1" }),
+  "https://outreach.example.com/outreach/leads/lead%201/sequences/generate",
+);
+assert.equal(
+  buildOutreachActionUrl("https://outreach.example.com", "approve", { sequenceId: "seq/1" }),
+  "https://outreach.example.com/outreach/sequences/seq%2F1/approve",
+);
+assert.equal(
+  buildOutreachActionUrl("https://outreach.example.com", "reject", { sequenceId: "seq-1" }),
+  "https://outreach.example.com/outreach/sequences/seq-1/reject",
+);
+assert.equal(
+  buildOutreachActionUrl("https://outreach.example.com", "launch", { sequenceId: "seq-1" }),
+  "https://outreach.example.com/outreach/sequences/seq-1/launch-saleshandy",
+);
+assert.throws(() => buildOutreachActionUrl("https://outreach.example.com", "launch", { leadId: qaLeadId }), /sequence_id/);
 
 const baseSequence = {
   id: "seq-1",

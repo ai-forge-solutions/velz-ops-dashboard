@@ -202,12 +202,13 @@ function OutreachSection({ brand, onRefresh }) {
   const send = outreach?.send;
   const provider = outreach?.provider || {};
   const actionConfigured = outreach?.actionConfigured || {};
+  const sequenceId = sequence?.id || sequence?.sequence_id;
   const events = Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const magnetEvents = Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const canGenerate = Boolean(outreach?.readyToGenerate && actionConfigured.generate && !outreach?.blockers?.length);
-  const canApprove = Boolean(outreach?.canApprove && actionConfigured.approve && sequence && !outreach?.blockers?.length);
-  const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequence);
-  const canLaunch = Boolean(outreach?.launchEligible && configured && !outreach?.blockers?.length);
+  const canApprove = Boolean(outreach?.canApprove && actionConfigured.approve && sequenceId && !outreach?.blockers?.length);
+  const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequenceId);
+  const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length);
 
   async function runAction(action, handler) {
     setBusyAction(action);
@@ -230,7 +231,7 @@ function OutreachSection({ brand, onRefresh }) {
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <h3 className="font-medium">Outreach</h3>
-          <p className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>Readiness → Generate sequence → Review/Approve → Launch Saleshandy → Engagement. Actions call backend by lead_id only when the backend contract is configured.</p>
+          <p className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>Readiness → Generate sequence → Review/Approve → Launch Saleshandy → Engagement. Generate calls backend by lead_id; approve/reject/launch call backend by sequence_id.</p>
         </div>
         <div className="flex flex-col items-end gap-1">
           <OutreachPill tone={tone}>{outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "Not ready")}</OutreachPill>
@@ -251,6 +252,7 @@ function OutreachSection({ brand, onRefresh }) {
           <KeyValueList title="Readiness checks" values={[
             ["recipient", outreach.email],
             ["lead_id", outreach.leadId],
+            ["sequence_id", sequenceId],
             ["tool_key", sequence?.tool_key || outreach.lead?.tool_key],
             ["public tool URL", outreach.toolUrl, outreach.toolUrl],
             ["ready_to_generate", outreach.readyToGenerate ? "true" : "false"],
@@ -264,8 +266,9 @@ function OutreachSection({ brand, onRefresh }) {
                 {busyAction === "generate" ? "Generating…" : "Generate sequence"}
               </button>
             </div>
-            {!actionConfigured.generate && <EmptyState>Generate disabled: backend generate endpoint/path is not configured yet. UI stays read-only until the companion backend exposes the contract.</EmptyState>}
+            {!actionConfigured.generate && <EmptyState>Generate disabled: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/leads/{'{lead_id}'}/sequences/generate.</EmptyState>}
             {actionConfigured.generate && !outreach.readyToGenerate && <EmptyState>Generate hidden by backend state: lead is not ready_to_generate.</EmptyState>}
+            {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Generate blocked by readiness/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
           </section>
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
@@ -276,14 +279,14 @@ function OutreachSection({ brand, onRefresh }) {
             <SequencePreview sequence={sequence} />
             <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
               <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
-              <button onClick={() => runAction("reject", () => rejectOutreachSequence(outreach.leadId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
+              <button onClick={() => runAction("reject", () => rejectOutreachSequence(sequenceId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
                 {busyAction === "reject" ? "Rejecting…" : "Reject / needs changes"}
               </button>
-              <button onClick={() => runAction("approve", () => approveOutreachSequence(outreach.leadId))} disabled={!canApprove || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canApprove ? COLORS.green : COLORS.line, color: canApprove ? "#fff" : COLORS.muted }}>
+              <button onClick={() => runAction("approve", () => approveOutreachSequence(sequenceId))} disabled={!canApprove || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canApprove ? COLORS.green : COLORS.line, color: canApprove ? "#fff" : COLORS.muted }}>
                 {busyAction === "approve" ? "Approving…" : "Approve sequence"}
               </button>
             </div>
-            <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Approval only changes backend review state; it does not send email. Approve/reject controls remain disabled until configured backend endpoints are available.</p>
+            <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Approval only changes backend review state for sequence_id; it does not send email. Approve/reject controls stay disabled when VITE_OUTREACH_API_BASE_URL is missing, no sequence_id exists, or backend readiness blocks review.</p>
           </section>
 
           <KeyValueList title="Saleshandy / provider lifecycle" values={[
@@ -304,7 +307,8 @@ function OutreachSection({ brand, onRefresh }) {
             <button onClick={() => setConfirming(true)} disabled={!canLaunch || busyAction} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canLaunch ? COLORS.green : COLORS.line, color: canLaunch ? "#fff" : COLORS.muted }}>
               Launch Saleshandy
             </button>
-            {!configured && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: falta configurar VITE_OUTREACH_API_BASE_URL/VITE_OUTREACH_ORCHESTRATION_BASE_URL y ruta de launch. No hay llamadas directas a Saleshandy desde el browser.</p>}
+            {!configured && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/sequences/{'{sequence_id}'}/launch-saleshandy. VITE_OUTREACH_ORCHESTRATION_BASE_URL queda solo como alias legacy.</p>}
+            {configured && !sequenceId && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: el read model aún no expone sequence_id; approve/reject/launch no usan lead_id como fallback.</p>}
             {configured && !outreach.launchEligible && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada por el read model: launch solo aparece cuando backend marca launch-ready y no hay estado final/bloqueado.</p>}
           </div>
 
@@ -329,13 +333,14 @@ function OutreachSection({ brand, onRefresh }) {
             <dl className="mb-4 grid gap-2 text-xs">
               <KeyValue label="recipient" value={outreach?.email} />
               <KeyValue label="lead_id" value={outreach?.leadId} />
+              <KeyValue label="sequence_id" value={sequenceId} />
               <KeyValue label="subject" value={sequence?.subject} />
               <KeyValue label="tool URL" value={outreach?.toolUrl} href={outreach?.toolUrl} />
               <KeyValue label="provider_sequence_id" value={provider.provider_sequence_id} />
             </dl>
             <div className="flex justify-end gap-2">
               <button onClick={() => setConfirming(false)} className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }}>Cancelar</button>
-              <button onClick={() => runAction("launch", () => launchSaleshandyQaBulk(outreach.leadId))} disabled={busyAction === "launch"} className="rounded px-3 py-2 text-xs font-medium" style={{ background: COLORS.green, color: "#fff" }}>{busyAction === "launch" ? "Launching…" : "Confirmar launch"}</button>
+              <button onClick={() => runAction("launch", () => launchSaleshandyQaBulk(sequenceId, outreach.leadId))} disabled={busyAction === "launch"} className="rounded px-3 py-2 text-xs font-medium" style={{ background: COLORS.green, color: "#fff" }}>{busyAction === "launch" ? "Launching…" : "Confirmar launch"}</button>
             </div>
           </div>
         </div>
