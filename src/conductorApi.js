@@ -145,6 +145,14 @@ export async function runConductorPipeline(brandId) {
   return conductorPost("/microservices/run-all", { supabase_id: brandId });
 }
 
+export async function previewProcess(payload) {
+  return conductorPost("/processes/preview", payload);
+}
+
+export async function runProcess(payload) {
+  return conductorPost("/processes/runs", payload);
+}
+
 export async function getMetaAdLibraryRun(serviceRunId) {
   if (!serviceRunId) throw new Error("Falta service_run_id para consultar Meta Ads.");
   return conductorGet(`/microservices/meta-ad-library/runs/${encodeURIComponent(serviceRunId)}`);
