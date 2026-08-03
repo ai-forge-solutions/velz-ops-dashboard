@@ -1,8 +1,8 @@
 # velz-ops-dashboard
 
-Panel operativo diario del pipeline de Velz Auto-Outreach: marcas (filas) × microservicios (columnas), con trigger ad-hoc y cascadas programadas.
+Panel operativo diario del pipeline de Velz Auto-Outreach: marcas (filas) × microservicios (columnas), triggers ad-hoc y configurador de procesos one-shot.
 
-**Estado actual: datos reales de Supabase + triggers reales del conductor.** Las marcas se leen en vivo desde las tablas `brands` y `service_runs` del proyecto `velz-outreach`; cada celda muestra la última ejecución conocida por marca/servicio. Los triggers ("Ejecutar ahora"), el botón Pipeline y las cascadas llaman directamente al conductor configurado en `VITE_CONDUCTOR_BASE_URL` para el MVP interno; al terminar refrescan el estado persistido en Supabase. Las cascadas guardadas persisten en `localStorage` del navegador (solo en tu máquina, no compartido entre dispositivos).
+**Estado actual: datos reales de Supabase + triggers reales del conductor.** Las marcas se leen en vivo desde las tablas `brands` y `service_runs` del proyecto `velz-outreach`; cada celda muestra la última ejecución conocida por marca/servicio. Los triggers ("Ejecutar ahora") y el botón Pipeline llaman directamente al conductor configurado en `VITE_CONDUCTOR_BASE_URL` para el MVP interno; al terminar refrescan el estado persistido en Supabase. La vista `Procesos` construye el contrato común y llama endpoints reales: `POST /processes/preview` antes de habilitar `POST /processes/runs`.
 
 ## Desarrollo local
 
@@ -68,7 +68,7 @@ El dashboard llama directamente al conductor de Velz para este MVP interno:
 VITE_CONDUCTOR_BASE_URL=https://velz-signals-conductor-stg.blackocean-de4b65c4.westeurope.azurecontainerapps.io
 ```
 
-Los servicios desplegados (`meta_ad_library_scraper`, `brand_reviews`, `web_stack_wappalyzer`, `shopify_signals`, `brand_context`) envían `{ "supabase_id": "<brands.id>" }` a sus endpoints del conductor. `shopify_signals` dispara `POST /microservices/shopify-signals`, que a su vez llama al microservicio Shopify ya integrado por el conductor. Los servicios sin endpoint (`similarweb`, `drafting`, `export`) se muestran como no desplegados y no disparan llamadas. El botón Pipeline usa `POST /microservices/run-all`; las ejecuciones individuales y cascadas usan el endpoint de cada servicio.
+Los servicios desplegados (`meta_ad_library_scraper`, `brand_reviews`, `web_stack_wappalyzer`, `shopify_signals`, `brand_context`) envían `{ "supabase_id": "<brands.id>" }` a sus endpoints del conductor. `shopify_signals` dispara `POST /microservices/shopify-signals`, que a su vez llama al microservicio Shopify ya integrado por el conductor. Los servicios sin endpoint (`similarweb`, `drafting`, `export`) se muestran como no desplegados y no disparan llamadas. El botón Pipeline usa `POST /microservices/run-all`; las ejecuciones individuales usan el endpoint de cada servicio. La pestaña Procesos prepara `{ brand_ids, filters, steps, execution }`, llama `POST /processes/preview` y solo permite `POST /processes/runs` con el mismo payload validado.
 
 ## Estructura
 
