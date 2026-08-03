@@ -1,20 +1,19 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Check, X, Loader2, Clock, AlertTriangle, Minus, Play, Search,
-  ChevronUp, ChevronDown, Plus, Trash2, CalendarClock, Pause,
-  PlayCircle, Users, ChevronRight, Info, RotateCcw
+  ChevronDown, Plus, Trash2, PlayCircle, Users, ChevronRight, Info, RotateCcw
 } from "lucide-react";
 import { loadDashboardBrands } from "./supabaseData";
 import {
   conductorServiceAvailable,
-  generateOutreachSequence,
   getMetaAdLibraryRun,
-  launchSaleshandyQaBulk,
+  previewProcess,
   runConductorPipeline,
   runConductorService,
+  runProcess,
 } from "./conductorApi";
 import BrandDrawer from "./BrandDrawer";
-import { CASCADE_ETL_FILTERS, normalizeCascadeStep, resolveCascadeTargets } from "./cascadeLogic";
+import { buildProcessPayload, defaultProcessSteps, payloadSignature, PROCESS_STEP_OPTIONS, resolveProcessBrandIds } from "./processLogic";
 import { deriveOutreachFilters } from "./outreachStatus";
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
@@ -35,18 +34,6 @@ const SERVICES = [
   { key: "drafting", label: "Drafting", deployed: false },
   { key: "export", label: "Export", deployed: false },
 ];
-
-const OUTREACH_CASCADE_ACTIONS = [
-  { key: "generate_sequence", type: "outreach", label: "Generar email sequence", deployed: true },
-  { key: "send_sequence", type: "outreach", label: "Enviar email sequence", deployed: true },
-];
-
-const CASCADE_STEP_OPTIONS = [
-  ...SERVICES.filter((service) => service.deployed).map((service) => ({ ...service, type: "etl" })),
-  ...OUTREACH_CASCADE_ACTIONS,
-];
-
-const WEEKDAYS = ["L", "M", "X", "J", "V", "S", "D"];
 
 const COLORS = {
   ink: "#14161A",
@@ -197,8 +184,6 @@ export default function App() {
   const [selected, setSelected] = useState(() => new Set());
   const [popover, setPopover] = useState(null); // {brandId, serviceKey}
   const [drawerBrand, setDrawerBrand] = useState(null);
-  const [cascades, setCascades] = useState([]);
-  const [loadedStorage, setLoadedStorage] = useState(false);
   const popRef = useRef(null);
 
   const [actionMessage, setActionMessage] = useState(null);
@@ -275,20 +260,6 @@ export default function App() {
     loadBrands();
     return () => { cancelled = true; };
   }, []);
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem("velz:cascades");
-      if (raw) setCascades(JSON.parse(raw));
-    } catch (e) { /* no saved cascades yet */ }
-    setLoadedStorage(true);
-  }, []);
-
-  useEffect(() => {
-    if (!loadedStorage) return;
-    try { localStorage.setItem("velz:cascades", JSON.stringify(cascades)); }
-    catch (e) { console.error("No se pudo guardar la cascada", e); }
-  }, [cascades, loadedStorage]);
 
   useEffect(() => {
     function onClick(e) {
@@ -392,37 +363,6 @@ export default function App() {
     }
   }
 
-  async function triggerOutreachGenerate(brand) {
-    const leadId = brand?.outreach?.leadId;
-    if (!leadId || !brand?.outreach?.readyToGenerate) {
-      setActionMessage({ tone: "warning", text: `${brand?.name || "Lead"}: no está listo para generar sequence o falta lead_id.` });
-      return;
-    }
-    try {
-      const result = await generateOutreachSequence(leadId);
-      setActionMessage({ tone: "success", text: `${brand.name}: generación de email sequence solicitada${result?.id ? ` · ${result.id}` : ""}.` });
-      await refreshDashboardBrands();
-    } catch (error) {
-      setActionMessage({ tone: "error", text: `${brand?.name || "Lead"}: no se pudo generar la sequence — ${error.message}` });
-    }
-  }
-
-  async function triggerOutreachSend(brand) {
-    const leadId = brand?.outreach?.leadId;
-    const sequenceId = brand?.outreach?.sequence?.id;
-    if (!leadId || !sequenceId || !brand?.outreach?.launchEligible) {
-      setActionMessage({ tone: "warning", text: `${brand?.name || "Lead"}: no está listo para enviar o falta sequence_id/lead_id.` });
-      return;
-    }
-    try {
-      const result = await launchSaleshandyQaBulk(sequenceId, leadId);
-      setActionMessage({ tone: "success", text: `${brand.name}: envío/import Saleshandy solicitado${result?.id ? ` · ${result.id}` : ""}.` });
-      await refreshDashboardBrands();
-    } catch (error) {
-      setActionMessage({ tone: "error", text: `${brand?.name || "Lead"}: no se pudo enviar la sequence — ${error.message}` });
-    }
-  }
-
   const filtered = brands.filter(b =>
     b.name.toLowerCase().includes(search.toLowerCase()) ||
     b.domain.toLowerCase().includes(search.toLowerCase())
@@ -458,11 +398,11 @@ export default function App() {
           <span className="mt-1 truncate text-xs uppercase tracking-widest" style={{ color: COLORS.muted }}>outreach ops</span>
         </div>
         <div className="grid grid-cols-3 gap-1 rounded-full p-1 sm:flex" style={{ background: "#F4F3EF" }}>
-          {["runs", "outreach", "cascades"].map(t => (
+          {["runs", "outreach", "processes"].map(t => (
             <button key={t} onClick={() => setTab(t)}
               className="px-4 py-1.5 rounded-full text-xs font-medium transition-colors"
               style={{ background: tab === t ? COLORS.ink : "transparent", color: tab === t ? "#fff" : COLORS.ink }}>
-              {t === "runs" ? "Ejecuciones" : t === "outreach" ? "Outreach" : "Cascadas"}
+              {t === "runs" ? "Ejecuciones" : t === "outreach" ? "Outreach" : "Procesos"}
             </button>
           ))}
         </div>
@@ -481,12 +421,10 @@ export default function App() {
       ) : tab === "outreach" ? (
         <OutreachView brands={filtered} loading={loadingBrands} error={loadError} openBrandDrawer={setDrawerBrand} />
       ) : (
-        <CascadesView
-          brands={brands} selected={selected} cascades={cascades} setCascades={setCascades}
-          triggerService={triggerService}
-          triggerOutreachGenerate={triggerOutreachGenerate}
-          triggerOutreachSend={triggerOutreachSend}
+        <ProcessesView
+          brands={brands} selected={selected}
           actionMessage={actionMessage}
+          setActionMessage={setActionMessage}
           clearActionMessage={() => setActionMessage(null)}
         />
       )}
@@ -659,7 +597,7 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
 
       <div className="mt-3 flex items-start gap-1.5 text-[11px]" style={{ color: COLORS.muted }}>
         <Info size={13} className="mt-0.5 shrink-0" />
-        <span>Marcas y estado leídos en vivo desde Supabase <span className="mono">velz-outreach</span>. “Ejecutar ahora”, Pipeline y cascadas llaman al conductor configurado en <span className="mono">VITE_CONDUCTOR_BASE_URL</span>; Meta Ads arranca como job async, guarda <span className="mono">service_run_id</span> y se refresca con polling corto sin mantener una request larga abierta.</span>
+        <span>Marcas y estado leídos en vivo desde Supabase <span className="mono">velz-outreach</span>. “Ejecutar ahora” y Pipeline llaman al conductor configurado en <span className="mono">VITE_CONDUCTOR_BASE_URL</span>; Meta Ads arranca como job async, guarda <span className="mono">service_run_id</span> y se refresca con polling corto sin mantener una request larga abierta. La pestaña Procesos usa <span className="mono">POST /processes/preview</span> y <span className="mono">POST /processes/runs</span>.</span>
       </div>
     </div>
   );
@@ -895,67 +833,89 @@ function OutreachView({ brands, loading, error, openBrandDrawer }) {
 }
 
 // ---------------------------------------------------------------------------
-function CascadesView({ brands, selected, cascades, setCascades, triggerService, triggerOutreachGenerate, triggerOutreachSend, actionMessage, clearActionMessage }) {
-  const [name, setName] = useState("");
-  const [steps, setSteps] = useState([]); // {type, key, delay}
-  const [addKey, setAddKey] = useState(CASCADE_STEP_OPTIONS[0].key);
-  const [startTime, setStartTime] = useState("09:00");
-  const [days, setDays] = useState([0, 1, 2, 3, 4]); // L-V by default
-  const [scope, setScope] = useState("all");
-  const [fitMin, setFitMin] = useState(80);
-  const [etlStateFilter, setEtlStateFilter] = useState("all");
+function ProcessesView({ brands, selected, actionMessage, setActionMessage, clearActionMessage }) {
+  const [scope, setScope] = useState("selected");
+  const [fitScoreMin, setFitScoreMin] = useState(70);
+  const [limit, setLimit] = useState(500);
+  const [steps, setSteps] = useState(defaultProcessSteps);
+  const [strategy, setStrategy] = useState("serial");
+  const [maxConcurrency, setMaxConcurrency] = useState(5);
+  const [continueOnError, setContinueOnError] = useState(true);
+  const [preview, setPreview] = useState(null);
+  const [validatedSignature, setValidatedSignature] = useState(null);
+  const [runResult, setRunResult] = useState(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [loadingRun, setLoadingRun] = useState(false);
 
-  function addStep() {
-    if (steps.some(s => s.key === addKey)) return;
-    const option = CASCADE_STEP_OPTIONS.find((item) => item.key === addKey);
-    if (!option) return;
-    setSteps([...steps, { type: option.type, key: option.key, delay: steps.length === 0 ? 0 : 15 }]);
-  }
-  function removeStep(i) { setSteps(steps.filter((_, idx) => idx !== i)); }
-  function move(i, dir) {
-    const next = [...steps];
-    const j = i + dir;
-    if (j < 0 || j >= next.length) return;
-    [next[i], next[j]] = [next[j], next[i]];
-    setSteps(next);
-  }
-  function toggleDay(d) {
-    setDays(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort());
-  }
+  const brandIds = resolveProcessBrandIds({ brands, selectedIds: selected, scope, fitScoreMin, limit });
+  const payload = buildProcessPayload({ brandIds, fitScoreMin, limit, steps, strategy, maxConcurrency, continueOnError });
+  const currentSignature = payloadSignature(payload);
+  const previewIsCurrent = validatedSignature === currentSignature;
+  const selectedSteps = payload.steps;
 
-  function save() {
-    if (!name.trim() || steps.length === 0) return;
-    const scopeBrandIds = scope === "selected" ? Array.from(selected) : null;
-    setCascades([...cascades, {
-      id: Date.now().toString(), name, steps, startTime, days: [...days],
-      scope, fitMin, etlStateFilter, scopeBrandIds, enabled: true,
-    }]);
-    setName(""); setSteps([]);
+  function updateStep(id, patch) {
+    setPreview(null);
+    setValidatedSignature(null);
+    setRunResult(null);
+    setSteps((prev) => prev.map((step) => step.id === id ? { ...step, ...patch } : step));
   }
 
-  function runCascadeStep(brand, step) {
-    const normalized = normalizeCascadeStep(step);
-    if (normalized.type === "outreach" && normalized.key === "generate_sequence") return triggerOutreachGenerate(brand);
-    if (normalized.type === "outreach" && normalized.key === "send_sequence") return triggerOutreachSend(brand);
-    return triggerService(brand.id, normalized.key);
+  function resetPreviewState() {
+    setPreview(null);
+    setValidatedSignature(null);
+    setRunResult(null);
   }
 
-  function runNow(cascade) {
-    const targets = resolveCascadeTargets({ brands, selectedIds: selected, cascade, services: SERVICES });
-    let cumMs = 0;
-    cascade.steps.forEach(step => {
-      cumMs += (step.delay || 0) * 60 * 1000 * 0.001; // scaled down for demo (min -> ~ms)
-      setTimeout(() => targets.forEach(b => runCascadeStep(b, step)), cumMs);
-    });
+  async function handlePreview() {
+    if (payload.brand_ids.length === 0 || payload.steps.length === 0) return;
+    setLoadingPreview(true);
+    setRunResult(null);
+    try {
+      const result = await previewProcess(payload);
+      setPreview(result || {});
+      setValidatedSignature(currentSignature);
+      setActionMessage({ tone: "success", text: "Preview real generado por el backend de procesos." });
+    } catch (error) {
+      setPreview(null);
+      setValidatedSignature(null);
+      setActionMessage({ tone: "error", text: `No se pudo generar preview: ${error.message}` });
+    } finally {
+      setLoadingPreview(false);
+    }
   }
 
-  const availableToAdd = CASCADE_STEP_OPTIONS.filter(s => !steps.some(st => st.key === s.key));
+  async function handleRun() {
+    if (!previewIsCurrent) return;
+    setLoadingRun(true);
+    try {
+      const result = await runProcess(payload);
+      setRunResult(result || {});
+      const processRunId = result?.process_run_id || result?.id || result?.run_id;
+      setActionMessage({ tone: "success", text: `Proceso lanzado${processRunId ? ` · process_run_id ${processRunId}` : ""}.` });
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `No se pudo ejecutar el proceso: ${error.message}` });
+    } finally {
+      setLoadingRun(false);
+    }
+  }
+
+  const estimatedTotal = preview?.total_items_estimated ?? preview?.estimated_total_items ?? preview?.total_items ?? preview?.items_estimated;
+  const previewBrandCount = preview?.brand_count ?? preview?.brands_count ?? preview?.brand_ids_count ?? payload.brand_ids.length;
+  const warnings = Array.isArray(preview?.warnings) ? preview.warnings : [];
+  const processRunId = runResult?.process_run_id || runResult?.id || runResult?.run_id;
 
   return (
-    <div className="grid grid-cols-1 gap-5 px-4 py-4 sm:grid-cols-2 sm:gap-6 sm:px-6 sm:py-5">
-      {/* Builder */}
+    <div className="grid grid-cols-1 gap-5 px-4 py-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)] sm:px-6 sm:py-5">
       <div className="rounded-md p-4" style={{ border: `1px solid ${COLORS.line}` }}>
-        <h3 className="font-medium mb-3">Nueva cascada</h3>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="font-medium">Configurar proceso</h3>
+            <p className="mt-1 text-xs" style={{ color: COLORS.muted }}>
+              Ejecución one-shot: selecciona marcas/filtros, steps y modo de outputs. No hay programación recurrente.
+            </p>
+          </div>
+          <span className="mono rounded-full px-2 py-1 text-[10px]" style={{ background: "#FAFAF8", color: COLORS.muted }}>POST /processes/*</span>
+        </div>
 
         {actionMessage && (
           <div
@@ -971,159 +931,142 @@ function CascadesView({ brands, selected, cascades, setCascades, triggerService,
           </div>
         )}
 
-        <label className="block text-[11px] mb-1" style={{ color: COLORS.muted }}>Nombre</label>
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="p.ej. Ronda diaria fit≥80"
-          className="w-full px-2.5 py-1.5 rounded text-xs mb-3" style={{ border: `1px solid ${COLORS.line}` }} />
+        <section className="mb-5">
+          <label className="mb-2 block text-[11px]" style={{ color: COLORS.muted }}>Marcas</label>
+          <div className="grid gap-2 text-xs sm:grid-cols-3">
+            <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "selected" ? COLORS.ink : COLORS.line}` }}>
+              <input type="radio" checked={scope === "selected"} onChange={() => { setScope("selected"); resetPreviewState(); }} className="mr-2" />
+              Seleccionadas ({selected.size})
+            </label>
+            <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "fit_score" ? COLORS.ink : COLORS.line}` }}>
+              <input type="radio" checked={scope === "fit_score"} onChange={() => { setScope("fit_score"); resetPreviewState(); }} className="mr-2" />
+              Fit score ≥
+              <input type="number" value={fitScoreMin} onChange={e => { setFitScoreMin(Number(e.target.value)); resetPreviewState(); }} className="ml-2 w-14 mono rounded px-1 py-0.5" style={{ border: `1px solid ${COLORS.line}` }} />
+            </label>
+            <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "all" ? COLORS.ink : COLORS.line}` }}>
+              <input type="radio" checked={scope === "all"} onChange={() => { setScope("all"); resetPreviewState(); }} className="mr-2" />
+              Todas ({brands.length})
+            </label>
+          </div>
+          <div className="mt-2 flex items-center gap-2 text-[11px]" style={{ color: COLORS.muted }}>
+            <Users size={13} />
+            <span>{payload.brand_ids.length} marcas incluidas en <span className="mono">brand_ids</span>; límite </span>
+            <input type="number" min="1" value={limit} onChange={e => { setLimit(Number(e.target.value)); resetPreviewState(); }} className="w-20 mono rounded px-1 py-0.5 text-right" style={{ border: `1px solid ${COLORS.line}` }} />
+          </div>
+        </section>
 
-        <label className="block text-[11px] mb-1" style={{ color: COLORS.muted }}>Pasos (orden + delay)</label>
-        <div className="space-y-1.5 mb-2">
-          {steps.map((st, i) => {
-            const svc = CASCADE_STEP_OPTIONS.find(s => s.key === st.key) || normalizeCascadeStep(st);
-            return (
-              <div key={st.key} className="flex items-center gap-2 px-2 py-1.5 rounded" style={{ background: "#FAFAF8" }}>
-                <span className="mono text-[10px] w-4" style={{ color: COLORS.muted }}>{i + 1}</span>
-                <span className="text-xs flex-1">{svc.label || st.key}</span>
-                {i > 0 && (
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px]" style={{ color: COLORS.muted }}>+</span>
-                    <input type="number" min="0" value={st.delay}
-                      onChange={e => setSteps(steps.map((s2, idx) => idx === i ? { ...s2, delay: Number(e.target.value) } : s2))}
-                      className="w-12 mono text-[11px] px-1 py-0.5 rounded text-right" style={{ border: `1px solid ${COLORS.line}` }} />
-                    <span className="text-[10px]" style={{ color: COLORS.muted }}>min</span>
+        <section className="mb-5">
+          <label className="mb-2 block text-[11px]" style={{ color: COLORS.muted }}>Steps y modo de outputs</label>
+          <div className="space-y-2">
+            {PROCESS_STEP_OPTIONS.map((option) => {
+              const step = steps.find((item) => item.id === option.id);
+              const enabled = Boolean(step?.enabled);
+              return (
+                <div key={option.id} className="rounded-md p-3" style={{ border: `1px solid ${enabled ? COLORS.ink : COLORS.line}`, background: enabled ? "#fff" : "#FAFAF8" }}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <label className="flex items-center gap-2 text-xs font-medium">
+                      <input type="checkbox" checked={enabled} onChange={e => updateStep(option.id, { enabled: e.target.checked })} />
+                      <span>{option.label}</span>
+                      <span className="mono text-[10px]" style={{ color: COLORS.muted }}>{option.id}</span>
+                    </label>
+                    <select disabled={!enabled} value={step?.mode || option.defaultMode} onChange={e => updateStep(option.id, { mode: e.target.value })} className="rounded px-2 py-1 text-xs mono" style={{ border: `1px solid ${COLORS.line}` }}>
+                      <option value="preserve_success">preserve_success</option>
+                      <option value="overwrite">overwrite</option>
+                    </select>
                   </div>
-                )}
-                <button onClick={() => move(i, -1)} disabled={i === 0}><ChevronUp size={12} color={i === 0 ? COLORS.line : COLORS.ink} /></button>
-                <button onClick={() => move(i, 1)} disabled={i === steps.length - 1}><ChevronDown size={12} color={i === steps.length - 1 ? COLORS.line : COLORS.ink} /></button>
-                <button onClick={() => removeStep(i)}><Trash2 size={12} color={COLORS.red} /></button>
-              </div>
-            );
-          })}
-          {steps.length === 0 && <div className="text-[11px] py-2" style={{ color: COLORS.muted }}>Añade el primer paso abajo.</div>}
-        </div>
-        <div className="flex items-center gap-2 mb-4">
-          <select value={addKey} onChange={e => setAddKey(e.target.value)} className="flex-1 px-2 py-1.5 rounded text-xs" style={{ border: `1px solid ${COLORS.line}` }}>
-            {availableToAdd.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
-          </select>
-          <button onClick={addStep} disabled={availableToAdd.length === 0}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded text-[11px] font-medium" style={{ border: `1px solid ${COLORS.ink}` }}>
-            <Plus size={11} /> Añadir paso
+                  {option.id === "email_send" && (
+                    <p className="mt-2 text-[11px]" style={{ color: COLORS.amber }}>
+                      Envío real: actívalo solo si quieres lanzar emails ahora. No se bloquea después de seleccionarlo explícitamente.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="mb-5">
+          <label className="mb-2 block text-[11px]" style={{ color: COLORS.muted }}>Ejecución</label>
+          <div className="grid gap-2 text-xs sm:grid-cols-3">
+            <select value={strategy} onChange={e => { setStrategy(e.target.value); resetPreviewState(); }} className="rounded px-2 py-1.5 mono" style={{ border: `1px solid ${COLORS.line}` }}>
+              <option value="serial">serial</option>
+              <option value="parallel">parallel</option>
+            </select>
+            <label className="flex items-center gap-2">
+              max_concurrency
+              <input type="number" min="1" value={maxConcurrency} onChange={e => { setMaxConcurrency(Number(e.target.value)); resetPreviewState(); }} className="w-16 rounded px-1 py-1 mono text-right" style={{ border: `1px solid ${COLORS.line}` }} />
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={continueOnError} onChange={e => { setContinueOnError(e.target.checked); resetPreviewState(); }} />
+              continue_on_error
+            </label>
+          </div>
+        </section>
+
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button onClick={handlePreview} disabled={loadingPreview || payload.brand_ids.length === 0 || payload.steps.length === 0}
+            className="flex flex-1 items-center justify-center gap-2 rounded px-3 py-2 text-xs font-medium"
+            style={{ background: (payload.brand_ids.length === 0 || payload.steps.length === 0) ? COLORS.line : COLORS.ink, color: "#fff" }}>
+            {loadingPreview ? <Loader2 size={13} className="animate-spin" /> : <PlayCircle size={13} />} Preview real
+          </button>
+          <button onClick={handleRun} disabled={loadingRun || !previewIsCurrent}
+            className="flex flex-1 items-center justify-center gap-2 rounded px-3 py-2 text-xs font-medium"
+            style={{ background: previewIsCurrent ? COLORS.green : COLORS.line, color: "#fff" }}>
+            {loadingRun ? <Loader2 size={13} className="animate-spin" /> : <PlayCircle size={13} />} Ejecutar ahora
           </button>
         </div>
-
-        {/* horizon preview */}
-        {steps.length > 0 && (
-          <div className="mb-4 py-3">
-            <svg width="100%" height="40" viewBox={`0 0 ${Math.max(steps.length * 90, 90)} 40`}>
-              <line x1="10" y1="20" x2={Math.max(steps.length * 90, 90) - 10} y2="20" stroke={COLORS.line} strokeWidth="1" />
-              {steps.map((st, i) => (
-                <g key={st.key}>
-                  <circle cx={10 + i * 90} cy="20" r="5" fill={COLORS.ink} />
-                  <text x={10 + i * 90} y="34" fontSize="9" textAnchor="middle" fill={COLORS.muted} fontFamily="IBM Plex Mono">
-                    {CASCADE_STEP_OPTIONS.find(s => s.key === st.key)?.label?.slice(0, 10) || st.key.slice(0, 10)}
-                  </text>
-                  {i > 0 && (
-                    <text x={10 + (i - 0.5) * 90} y="12" fontSize="9" textAnchor="middle" fill={COLORS.muted} fontFamily="IBM Plex Mono">
-                      +{st.delay}m
-                    </text>
-                  )}
-                </g>
-              ))}
-            </svg>
-          </div>
-        )}
-
-        <label className="block text-[11px] mb-1" style={{ color: COLORS.muted }}>Programación</label>
-        <div className="mb-2 flex flex-col gap-3 sm:flex-row sm:items-center">
-          <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)}
-            className="px-2 py-1.5 rounded text-xs mono" style={{ border: `1px solid ${COLORS.line}` }} />
-          <div className="flex flex-wrap gap-1">
-            {WEEKDAYS.map((d, i) => (
-              <button key={i} onClick={() => toggleDay(i)}
-                className="w-6 h-6 rounded-full text-[10px] font-medium"
-                style={{ background: days.includes(i) ? COLORS.ink : "#fff", color: days.includes(i) ? "#fff" : COLORS.muted, border: `1px solid ${COLORS.line}` }}>
-                {d}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <label className="block text-[11px] mb-1 mt-3" style={{ color: COLORS.muted }}>Alcance</label>
-        <div className="flex flex-col gap-1.5 mb-4 text-xs">
-          <label className="flex items-center gap-2"><input type="radio" checked={scope === "all"} onChange={() => setScope("all")} /> Todas las marcas ({brands.length})</label>
-          <label className="flex items-center gap-2">
-            <input type="radio" checked={scope === "fit_score"} onChange={() => setScope("fit_score")} />
-            Fit score ≥ <input type="number" value={fitMin} onChange={e => setFitMin(Number(e.target.value))} className="w-12 mono px-1 py-0.5 rounded" style={{ border: `1px solid ${COLORS.line}` }} />
-          </label>
-          <label className="flex items-center gap-2">
-            <input type="radio" checked={scope === "selected"} disabled={selected.size === 0} onChange={() => setScope("selected")} />
-            Seleccionadas en la tabla ({selected.size})
-          </label>
-        </div>
-
-        <label className="block text-[11px] mb-1 mt-3" style={{ color: COLORS.muted }}>Estado ETL</label>
-        <select value={etlStateFilter} onChange={e => setEtlStateFilter(e.target.value)} className="mb-4 w-full px-2 py-1.5 rounded text-xs" style={{ border: `1px solid ${COLORS.line}` }}>
-          {CASCADE_ETL_FILTERS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-        </select>
-
-        <div className="mb-4 flex items-start gap-1.5 text-[11px]" style={{ color: COLORS.muted }}>
-          <Info size={13} className="mt-0.5 shrink-0" />
-          <span>Las cascadas pueden mezclar pasos ETL con generación y envío de email sequences. Requiere <span className="mono">VITE_OUTREACH_API_BASE_URL</span>; las rutas por defecto cubren generate y launch Saleshandy.</span>
-        </div>
-
-        <button onClick={save} disabled={!name.trim() || steps.length === 0}
-          className="w-full py-2 rounded text-xs font-medium" style={{ background: (!name.trim() || steps.length === 0) ? COLORS.line : COLORS.green, color: "#fff" }}>
-          Guardar cascada
-        </button>
       </div>
 
-      {/* Saved list */}
-      <div>
-        <h3 className="font-medium mb-3">Cascadas guardadas</h3>
-        {cascades.length === 0 && (
-          <div className="text-[11px] p-4 rounded-md" style={{ border: `1px dashed ${COLORS.line}`, color: COLORS.muted }}>
-            Aún no has creado ninguna cascada. Móntala en el panel de la izquierda.
+      <div className="space-y-4">
+        <div className="rounded-md p-4" style={{ border: `1px solid ${COLORS.line}` }}>
+          <h3 className="mb-3 font-medium">Payload común</h3>
+          <pre className="max-h-[360px] overflow-auto rounded-md p-3 text-[11px] mono" style={{ background: "#FAFAF8", color: COLORS.ink }}>
+{JSON.stringify(payload, null, 2)}
+          </pre>
+        </div>
+
+        <div className="rounded-md p-4" style={{ border: `1px solid ${COLORS.line}` }}>
+          <h3 className="mb-3 font-medium">Preview backend</h3>
+          {!preview && <p className="text-xs" style={{ color: COLORS.muted }}>Genera preview antes de ejecutar. El botón de ejecución usa exactamente el payload validado.</p>}
+          {preview && (
+            <div className="space-y-3 text-xs">
+              <div className="grid grid-cols-3 gap-2">
+                <Metric label="marcas" value={previewBrandCount} />
+                <Metric label="steps" value={selectedSteps.length} />
+                <Metric label="items est." value={estimatedTotal ?? "—"} />
+              </div>
+              {warnings.length > 0 && (
+                <div className="rounded-md p-3" style={{ border: `1px solid ${COLORS.amber}`, color: COLORS.amber }}>
+                  <div className="mb-1 font-medium">Warnings backend</div>
+                  <ul className="list-disc pl-4">
+                    {warnings.map((warning, index) => <li key={index}>{typeof warning === "string" ? warning : JSON.stringify(warning)}</li>)}
+                  </ul>
+                </div>
+              )}
+              <pre className="max-h-[220px] overflow-auto rounded-md p-3 text-[11px] mono" style={{ background: "#FAFAF8", color: COLORS.ink }}>
+{JSON.stringify(preview, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+
+        {runResult && (
+          <div className="rounded-md p-4 text-xs" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
+            <h3 className="mb-2 font-medium">Proceso lanzado</h3>
+            <p>process_run_id: <span className="mono">{processRunId || "—"}</span></p>
+            <p className="mt-1" style={{ color: COLORS.muted }}>El monitor real queda para la vista de MIG-158.</p>
           </div>
         )}
-        <div className="space-y-2">
-          {cascades.map(c => (
-            <CascadeCard key={c.id} cascade={c} onRun={() => runNow(c)}
-              onToggle={() => setCascades(cascades.map(x => x.id === c.id ? { ...x, enabled: !x.enabled } : x))}
-              onDelete={() => setCascades(cascades.filter(x => x.id !== c.id))} />
-          ))}
-        </div>
       </div>
     </div>
   );
 }
 
-function CascadeCard({ cascade, onRun, onToggle, onDelete }) {
-  const scopeLabel = cascade.scope === "all" ? "todas las marcas"
-    : cascade.scope === "fit_score" ? `fit ≥ ${cascade.fitMin}`
-    : `${(cascade.scopeBrandIds || []).length} seleccionadas`;
-  const etlFilterLabel = CASCADE_ETL_FILTERS.find((item) => item.key === (cascade.etlStateFilter || "all"))?.label;
+function Metric({ label, value }) {
   return (
-    <div className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}`, opacity: cascade.enabled ? 1 : 0.5 }}>
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="font-medium text-xs">{cascade.name}</span>
-        <div className="flex items-center gap-2">
-          <button onClick={onRun} title="Ejecutar ahora"><PlayCircle size={14} color={COLORS.green} /></button>
-          <button onClick={onToggle} title="Pausar/activar">{cascade.enabled ? <Pause size={13} /> : <PlayCircle size={13} />}</button>
-          <button onClick={onDelete} title="Eliminar"><Trash2 size={13} color={COLORS.red} /></button>
-        </div>
-      </div>
-      <div className="flex items-center gap-1 text-[11px] flex-wrap" style={{ color: COLORS.muted }}>
-        {cascade.steps.map((s, i) => (
-          <span key={s.key} className="flex items-center gap-1">
-            {i > 0 && <ChevronRight size={10} />}
-            <span className="mono">{CASCADE_STEP_OPTIONS.find(x => x.key === s.key)?.label || s.key}</span>
-          </span>
-        ))}
-      </div>
-      <div className="flex items-center gap-3 mt-2 text-[10px] mono" style={{ color: COLORS.muted }}>
-        <span className="flex items-center gap-1"><CalendarClock size={11} /> {cascade.startTime} · {cascade.days.map(d => WEEKDAYS[d]).join("")}</span>
-        <span className="flex items-center gap-1"><Users size={11} /> {scopeLabel}</span>
-        <span>{etlFilterLabel}</span>
-      </div>
+    <div className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
+      <div className="mono text-[10px] uppercase" style={{ color: COLORS.muted }}>{label}</div>
+      <div className="mt-1 text-lg font-medium">{value}</div>
     </div>
   );
 }
