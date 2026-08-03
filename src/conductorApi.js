@@ -153,6 +153,16 @@ export async function runProcess(payload) {
   return conductorPost("/processes/runs", payload);
 }
 
+export async function executeProcess(processRunId, execution = {}) {
+  if (!processRunId) throw new Error("Falta process_run_id para lanzar el proceso.");
+  return conductorPost(`/processes/runs/${encodeURIComponent(processRunId)}/execute`, execution);
+}
+
+export async function getProcessRun(processRunId) {
+  if (!processRunId) throw new Error("Falta process_run_id para consultar el proceso.");
+  return conductorGet(`/processes/runs/${encodeURIComponent(processRunId)}`);
+}
+
 export async function getMetaAdLibraryRun(serviceRunId) {
   if (!serviceRunId) throw new Error("Falta service_run_id para consultar Meta Ads.");
   return conductorGet(`/microservices/meta-ad-library/runs/${encodeURIComponent(serviceRunId)}`);
