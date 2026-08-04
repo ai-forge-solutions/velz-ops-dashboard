@@ -6,14 +6,29 @@ import {
 import { loadDashboardBrands } from "./supabaseData";
 import {
   conductorServiceAvailable,
+  executeProcess,
   getMetaAdLibraryRun,
+  getProcessRun,
   previewProcess,
   runConductorPipeline,
   runConductorService,
   runProcess,
 } from "./conductorApi";
 import BrandDrawer from "./BrandDrawer";
-import { buildProcessPayload, defaultProcessSteps, payloadSignature, PROCESS_STEP_OPTIONS, resolveProcessBrandIds } from "./processLogic";
+import {
+  buildProcessPayload,
+  defaultProcessSteps,
+  findProcessRunItem,
+  isProcessRunTerminal,
+  payloadSignature,
+  PROCESS_RUN_STATUSES,
+  PROCESS_STEP_OPTIONS,
+  processRunBrands,
+  processRunStatusSummary,
+  processRunSteps,
+  processStepLabel,
+  resolveProcessBrandIds,
+} from "./processLogic";
 import { deriveOutreachFilters } from "./outreachStatus";
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
@@ -70,8 +85,11 @@ function StatusDot({ status }) {
     running: { fill: COLORS.green, stroke: COLORS.green, icon: Loader2, spin: true },
     success: { fill: COLORS.green, stroke: COLORS.green, icon: Check },
     partial: { fill: COLORS.amber, stroke: COLORS.amber, icon: AlertTriangle },
+    failed: { fill: COLORS.red, stroke: COLORS.red, icon: X },
+    cancelled: { fill: "none", stroke: COLORS.red, icon: X },
     error: { fill: COLORS.red, stroke: COLORS.red, icon: X },
     skipped: { fill: "none", stroke: COLORS.muted, icon: Minus },
+    skipped_preserved: { fill: "none", stroke: COLORS.muted, icon: Check },
   }[status];
   const Icon = cfg.icon;
   return (
@@ -103,7 +121,8 @@ function StatusDot({ status }) {
 function StatusLabel({ status }) {
   const map = {
     not_run: "Sin ejecutar", queued: "En cola", running: "Ejecutando",
-    success: "Éxito", partial: "Parcial", error: "Error", skipped: "Omitido",
+    success: "Éxito", partial: "Parcial", failed: "Fallido", cancelled: "Cancelado",
+    error: "Error", skipped: "Omitido", skipped_preserved: "Preservado",
   };
   return map[status];
 }
@@ -844,14 +863,49 @@ function ProcessesView({ brands, selected, actionMessage, setActionMessage, clea
   const [preview, setPreview] = useState(null);
   const [validatedSignature, setValidatedSignature] = useState(null);
   const [runResult, setRunResult] = useState(null);
+  const [activeProcessRunId, setActiveProcessRunId] = useState(() => new URLSearchParams(window.location.search).get("process_run_id") || "");
+  const [processRunInput, setProcessRunInput] = useState(() => new URLSearchParams(window.location.search).get("process_run_id") || "");
+  const [processRunDetail, setProcessRunDetail] = useState(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [executingRunId, setExecutingRunId] = useState(null);
 
   const brandIds = resolveProcessBrandIds({ brands, selectedIds: selected, scope, fitScoreMin, limit });
   const payload = buildProcessPayload({ brandIds, fitScoreMin, limit, steps, strategy, maxConcurrency, continueOnError });
   const currentSignature = payloadSignature(payload);
   const previewIsCurrent = validatedSignature === currentSignature;
   const selectedSteps = payload.steps;
+  const executionPayload = payload.execution;
+
+  function rememberProcessRunId(processRunId) {
+    setActiveProcessRunId(processRunId);
+    setProcessRunInput(processRunId);
+    const url = new URL(window.location.href);
+    if (processRunId) {
+      url.searchParams.set("process_run_id", processRunId);
+    } else {
+      url.searchParams.delete("process_run_id");
+    }
+    window.history.replaceState({}, "", url);
+  }
+
+  async function refreshProcessRun(processRunId = activeProcessRunId, { quiet = false } = {}) {
+    if (!processRunId) return null;
+    if (!quiet) setLoadingDetail(true);
+    try {
+      const detail = await getProcessRun(processRunId);
+      setProcessRunDetail(detail);
+      setActiveProcessRunId(detail?.id || processRunId);
+      setProcessRunInput(detail?.id || processRunId);
+      return detail;
+    } catch (error) {
+      if (!quiet) setActionMessage({ tone: "error", text: `No se pudo leer process_run_id ${processRunId}: ${error.message}` });
+      throw error;
+    } finally {
+      if (!quiet) setLoadingDetail(false);
+    }
+  }
 
   function updateStep(id, patch) {
     setPreview(null);
@@ -887,11 +941,26 @@ function ProcessesView({ brands, selected, actionMessage, setActionMessage, clea
   async function handleRun() {
     if (!previewIsCurrent) return;
     setLoadingRun(true);
+    setProcessRunDetail(null);
     try {
       const result = await runProcess(payload);
       setRunResult(result || {});
       const processRunId = result?.process_run_id || result?.id || result?.run_id;
-      setActionMessage({ tone: "success", text: `Proceso lanzado${processRunId ? ` · process_run_id ${processRunId}` : ""}.` });
+      if (!processRunId) throw new Error("El backend creó el proceso sin devolver process_run_id.");
+      rememberProcessRunId(processRunId);
+      setActionMessage({ tone: "success", text: `Proceso creado · process_run_id ${processRunId}. Lanzando ejecución backend…` });
+      await refreshProcessRun(processRunId, { quiet: true });
+      setExecutingRunId(processRunId);
+      executeProcess(processRunId, executionPayload)
+        .then(async (executeResult) => {
+          setRunResult((current) => ({ ...(current || result || {}), execute: executeResult }));
+          await refreshProcessRun(processRunId, { quiet: true });
+          setActionMessage({ tone: "success", text: `Ejecución backend terminada para process_run_id ${processRunId}: ${executeResult?.message || executeResult?.status || "sin mensaje"}` });
+        })
+        .catch((error) => {
+          setActionMessage({ tone: "error", text: `El proceso se creó, pero execute falló para ${processRunId}: ${error.message}` });
+        })
+        .finally(() => setExecutingRunId(null));
     } catch (error) {
       setActionMessage({ tone: "error", text: `No se pudo ejecutar el proceso: ${error.message}` });
     } finally {
@@ -899,10 +968,39 @@ function ProcessesView({ brands, selected, actionMessage, setActionMessage, clea
     }
   }
 
+  async function handleLoadRun(event) {
+    event.preventDefault();
+    const processRunId = processRunInput.trim();
+    if (!processRunId) return;
+    rememberProcessRunId(processRunId);
+    await refreshProcessRun(processRunId);
+  }
+
+  useEffect(() => {
+    if (!activeProcessRunId) return undefined;
+    let cancelled = false;
+    async function pollProcessRun() {
+      try {
+        const detail = await getProcessRun(activeProcessRunId);
+        if (!cancelled) setProcessRunDetail(detail);
+      } catch (error) {
+        if (!cancelled) setActionMessage({ tone: "error", text: `Polling de process_run_id ${activeProcessRunId} falló: ${error.message}` });
+      }
+    }
+    pollProcessRun();
+    if (isProcessRunTerminal(processRunDetail?.status)) return () => { cancelled = true; };
+    const timer = window.setInterval(pollProcessRun, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeProcessRunId, processRunDetail?.status]);
+
   const estimatedTotal = preview?.total_items_estimated ?? preview?.estimated_total_items ?? preview?.total_items ?? preview?.items_estimated;
   const previewBrandCount = preview?.brand_count ?? preview?.brands_count ?? preview?.brand_ids_count ?? payload.brand_ids.length;
   const warnings = Array.isArray(preview?.warnings) ? preview.warnings : [];
-  const processRunId = runResult?.process_run_id || runResult?.id || runResult?.run_id;
+  const processRunId = activeProcessRunId || runResult?.process_run_id || runResult?.id || runResult?.run_id;
+  const itemSummary = processRunStatusSummary(processRunDetail?.items || []);
 
   return (
     <div className="grid grid-cols-1 gap-5 px-4 py-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)] sm:px-6 sm:py-5">
@@ -1009,10 +1107,10 @@ function ProcessesView({ brands, selected, actionMessage, setActionMessage, clea
             style={{ background: (payload.brand_ids.length === 0 || payload.steps.length === 0) ? COLORS.line : COLORS.ink, color: "#fff" }}>
             {loadingPreview ? <Loader2 size={13} className="animate-spin" /> : <PlayCircle size={13} />} Preview real
           </button>
-          <button onClick={handleRun} disabled={loadingRun || !previewIsCurrent}
+          <button onClick={handleRun} disabled={loadingRun || executingRunId || !previewIsCurrent}
             className="flex flex-1 items-center justify-center gap-2 rounded px-3 py-2 text-xs font-medium"
             style={{ background: previewIsCurrent ? COLORS.green : COLORS.line, color: "#fff" }}>
-            {loadingRun ? <Loader2 size={13} className="animate-spin" /> : <PlayCircle size={13} />} Ejecutar ahora
+            {(loadingRun || executingRunId) ? <Loader2 size={13} className="animate-spin" /> : <PlayCircle size={13} />} Crear + ejecutar
           </button>
         </div>
       </div>
@@ -1050,14 +1148,91 @@ function ProcessesView({ brands, selected, actionMessage, setActionMessage, clea
           )}
         </div>
 
-        {runResult && (
-          <div className="rounded-md p-4 text-xs" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
-            <h3 className="mb-2 font-medium">Proceso lanzado</h3>
-            <p>process_run_id: <span className="mono">{processRunId || "—"}</span></p>
-            <p className="mt-1" style={{ color: COLORS.muted }}>El monitor real queda para la vista de MIG-158.</p>
+        <div className="rounded-md p-4 text-xs" style={{ border: `1px solid ${processRunDetail ? COLORS.green : COLORS.line}` }}>
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <h3 className="font-medium">Monitor persistido</h3>
+              <p className="mt-1" style={{ color: COLORS.muted }}>Lee progreso real desde GET /processes/runs/{"{id}"}. El enlace con process_run_id rehidrata tras refresh.</p>
+            </div>
+            {loadingDetail && <Loader2 size={14} className="animate-spin" color={COLORS.muted} />}
           </div>
-        )}
+          <form onSubmit={handleLoadRun} className="mb-3 flex gap-2">
+            <input value={processRunInput} onChange={e => setProcessRunInput(e.target.value)} placeholder="process_run_id" className="min-w-0 flex-1 rounded px-2 py-1 mono text-[11px]" style={{ border: `1px solid ${COLORS.line}` }} />
+            <button type="submit" className="rounded px-2 py-1 font-medium" style={{ background: COLORS.ink, color: "#fff" }}>Cargar</button>
+          </form>
+          {processRunId && <p className="mb-2">process_run_id: <span className="mono break-all">{processRunId}</span></p>}
+          {!processRunDetail && <p style={{ color: COLORS.muted }}>Crea un proceso o pega un process_run_id existente para ver historial/progreso.</p>}
+          {processRunDetail && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                <Metric label="estado" value={<StatusLabel status={processRunDetail.status} />} />
+                <Metric label="brand_count" value={processRunDetail.brand_count ?? "—"} />
+                <Metric label="item_count" value={processRunDetail.item_count ?? processRunDetail.items?.length ?? "—"} />
+              </div>
+              <div className="flex flex-wrap gap-2 mono text-[10px]" style={{ color: COLORS.muted }}>
+                {PROCESS_RUN_STATUSES.map((status) => (
+                  <span key={status}>{status}: {status === processRunDetail.status ? 1 : 0}</span>
+                ))}
+                {Object.entries(itemSummary).map(([status, count]) => <span key={status}>{status}: {count}</span>)}
+              </div>
+              <ProcessRunMonitorTable detail={processRunDetail} brands={brands} />
+            </div>
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+function ProcessRunMonitorTable({ detail, brands }) {
+  const runBrands = processRunBrands(detail, brands);
+  const runSteps = processRunSteps(detail);
+  if (runBrands.length === 0 || runSteps.length === 0) {
+    return <p className="text-xs" style={{ color: COLORS.muted }}>El backend todavía no devolvió items para este proceso.</p>;
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${COLORS.line}` }}>
+      <table className="w-full min-w-[760px] text-[11px]">
+        <thead>
+          <tr style={{ background: "#FAFAF8", borderBottom: `1px solid ${COLORS.line}` }}>
+            <th className="px-2 py-2 text-left font-medium" style={{ color: COLORS.muted }}>Marca</th>
+            {runSteps.map((stepId) => (
+              <th key={stepId} className="px-2 py-2 text-left font-medium" style={{ color: COLORS.muted }}>{processStepLabel(stepId)}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {runBrands.map((brand) => (
+            <tr key={brand.id} style={{ borderBottom: `1px solid ${COLORS.line}` }}>
+              <td className="px-2 py-2 align-top">
+                <div className="font-medium">{brand.name}</div>
+                <div className="mono text-[10px]" style={{ color: COLORS.muted }}>{brand.domain || brand.id}</div>
+              </td>
+              {runSteps.map((stepId) => {
+                const item = findProcessRunItem(detail, brand.id, stepId);
+                return (
+                  <td key={`${brand.id}-${stepId}`} className="px-2 py-2 align-top">
+                    {!item ? (
+                      <span style={{ color: COLORS.muted }}>—</span>
+                    ) : (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8"><StatusDot status={item.status} /></div>
+                          <span>{StatusLabel({ status: item.status })}</span>
+                        </div>
+                        <div className="mono text-[10px]" style={{ color: COLORS.muted }}>mode: {item.mode}</div>
+                        {item.service_run_id && <div className="mono break-all text-[10px]" style={{ color: COLORS.muted }}>service_run_id: {item.service_run_id}</div>}
+                        {item.error && <div className="text-[10px]" style={{ color: COLORS.red }}>error: {item.error}</div>}
+                      </div>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

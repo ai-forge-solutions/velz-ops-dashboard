@@ -11,6 +11,45 @@ const VALID_STEP_IDS = new Set(PROCESS_STEP_OPTIONS.map((step) => step.id));
 const VALID_STEP_MODES = new Set(["preserve_success", "overwrite"]);
 const VALID_EXECUTION_STRATEGIES = new Set(["serial", "parallel"]);
 
+export const PROCESS_RUN_TERMINAL_STATUSES = new Set(["success", "partial", "failed", "cancelled"]);
+export const PROCESS_RUN_STATUSES = ["queued", "running", "success", "partial", "failed", "cancelled"];
+export const PROCESS_RUN_ITEM_STATUSES = ["queued", "running", "success", "error", "skipped_preserved"];
+
+export function isProcessRunTerminal(status) {
+  return PROCESS_RUN_TERMINAL_STATUSES.has(status);
+}
+
+export function processStepLabel(stepId) {
+  return PROCESS_STEP_OPTIONS.find((step) => step.id === stepId)?.label || stepId;
+}
+
+export function processRunStatusSummary(items = []) {
+  return PROCESS_RUN_ITEM_STATUSES.reduce((acc, status) => {
+    acc[status] = items.filter((item) => item.status === status).length;
+    return acc;
+  }, {});
+}
+
+export function processRunBrands(detail = {}, fallbackBrands = []) {
+  const brandMap = new Map(fallbackBrands.map((brand) => [brand.id, brand]));
+  const items = Array.isArray(detail.items) ? detail.items : [];
+  return Array.from(new Set(items.map((item) => item.brand_id).filter(Boolean))).map((brandId) => ({
+    id: brandId,
+    name: items.find((item) => item.brand_id === brandId)?.brand_name || brandMap.get(brandId)?.name || brandId,
+    domain: brandMap.get(brandId)?.domain,
+  }));
+}
+
+export function processRunSteps(detail = {}) {
+  const items = Array.isArray(detail.items) ? detail.items : [];
+  return Array.from(new Set(items.map((item) => item.step_id).filter(Boolean)));
+}
+
+export function findProcessRunItem(detail = {}, brandId, stepId) {
+  const items = Array.isArray(detail.items) ? detail.items : [];
+  return items.find((item) => item.brand_id === brandId && item.step_id === stepId) || null;
+}
+
 export function defaultProcessSteps() {
   return PROCESS_STEP_OPTIONS.map((step) => ({
     id: step.id,
