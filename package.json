@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node tests/outreachStatus.test.mjs && node tests/cascadeLogic.test.mjs && node tests/processLogic.test.mjs && node tests/metaScrapeQuery.test.mjs",
+    "test": "node tests/outreachStatus.test.mjs && node tests/cascadeLogic.test.mjs && node tests/processLogic.test.mjs && node tests/metaScrapeQuery.test.mjs && vitest run",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -15,10 +15,14 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.3",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",
+    "jsdom": "^30.0.1",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
-    "vite": "^5.3.1"
+    "vite": "^5.3.1",
+    "vitest": "^4.1.10"
   }
 }
