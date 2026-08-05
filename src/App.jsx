@@ -50,6 +50,10 @@ const SERVICES = [
   { key: "export", label: "Export", deployed: false },
 ];
 
+function serviceLabel(serviceKey) {
+  return SERVICES.find((service) => service.key === serviceKey)?.label || serviceKey;
+}
+
 const COLORS = {
   ink: "#14161A",
   muted: "#8B8E92",
@@ -282,7 +286,8 @@ export default function App() {
 
   useEffect(() => {
     function onClick(e) {
-      if (popRef.current && !popRef.current.contains(e.target)) setPopover(null);
+      if (e.target?.closest?.("[data-cell-popover]")) return;
+      setPopover(null);
     }
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
@@ -322,6 +327,8 @@ export default function App() {
     }
 
     markServiceRunning(brandId, serviceKey);
+    const brandName = brands.find((brand) => brand.id === brandId)?.name || brandId;
+    setActionMessage({ tone: "success", text: `Lanzando ${serviceLabel(serviceKey)} para ${brandName}…` });
     try {
       const result = await runConductorService(brandId, serviceKey);
       markServiceFinished(brandId, serviceKey, result, "El orquestador terminó sin mensaje.");
@@ -732,7 +739,7 @@ function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
   const run = brand.runs[service.key];
   const status = run?.status || "not_run";
   return (
-    <div className="z-30 w-full min-w-56 rounded-md p-3 text-left sm:absolute sm:left-1/2 sm:top-8 sm:w-56 sm:-translate-x-1/2"
+    <div data-cell-popover className="z-30 w-full min-w-56 rounded-md p-3 text-left sm:absolute sm:left-1/2 sm:top-8 sm:w-56 sm:-translate-x-1/2"
       style={{ background: "#fff", border: `1px solid ${COLORS.line}`, boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}>
       <div className="flex items-center justify-between mb-2">
         <span className="font-medium text-[11px]">{service.label}</span>
