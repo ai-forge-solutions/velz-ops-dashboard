@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node tests/outreachStatus.test.mjs && node tests/cascadeLogic.test.mjs && node tests/processLogic.test.mjs",
+    "test": "node tests/outreachStatus.test.mjs && node tests/cascadeLogic.test.mjs && node tests/processLogic.test.mjs && node tests/metaScrapeQuery.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },
