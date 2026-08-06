@@ -15,7 +15,8 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { loadBrandSource } from "./supabaseData";
+import { loadBrandSource, loadLeadMagnetTools, setLeadMagnetToolKey } from "./supabaseData";
+import { assignmentDisplay, groupToolsBySegment, isToolSelectionDirty, toolOptionLabel } from "./leadToolCatalog";
 import {
   approveOutreachSequence,
   editOutreachSequenceDraft,
@@ -276,6 +277,123 @@ function OutreachDiagnostics({ diagnostics, probe, busy, onProbe }) {
   );
 }
 
+function LeadMagnetToolSelector({ outreach, onRefresh }) {
+  const [tools, setTools] = useState([]);
+  const [toolsError, setToolsError] = useState(null);
+  const [loadingTools, setLoadingTools] = useState(true);
+  const [selectedToolKey, setSelectedToolKey] = useState(outreach?.lead?.toolAssignment?.assigned_tool_key || outreach?.lead?.tool_key || "");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const [saveMessage, setSaveMessage] = useState(null);
+
+  const catalogByKey = useMemo(() => new Map(tools.map((tool) => [tool.tool_key, tool])), [tools]);
+  const assignment = assignmentDisplay(outreach?.lead?.toolAssignment, catalogByKey);
+  const groupedTools = groupToolsBySegment(tools);
+  const dirty = isToolSelectionDirty(assignment.selectedToolKey, selectedToolKey);
+
+  useEffect(() => {
+    setSelectedToolKey(outreach?.lead?.toolAssignment?.assigned_tool_key || outreach?.lead?.tool_key || "");
+    setSaveError(null);
+    setSaveMessage(null);
+  }, [outreach?.leadId, outreach?.lead?.toolAssignment?.assigned_tool_key, outreach?.lead?.tool_key]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTools() {
+      setLoadingTools(true);
+      setToolsError(null);
+      try {
+        const rows = await loadLeadMagnetTools();
+        if (!cancelled) setTools(rows || []);
+      } catch (error) {
+        if (!cancelled) setToolsError(error);
+      } finally {
+        if (!cancelled) setLoadingTools(false);
+      }
+    }
+    loadTools();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function saveToolKey() {
+    setSaving(true);
+    setSaveError(null);
+    setSaveMessage(null);
+    try {
+      await setLeadMagnetToolKey(outreach.leadId, selectedToolKey || null);
+      setSaveMessage(selectedToolKey ? "Tool asignada en leads.tool_key." : "Tool canónica limpiada; suggested_tool queda como texto fuente.");
+      await onRefresh?.();
+    } catch (error) {
+      setSaveError(error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h4 className="font-medium">Lead magnet / tool canónica</h4>
+          <p className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>
+            Selecciona desde el catálogo DB. Guardar escribe en <span className="mono">leads.tool_key</span>; <span className="mono">suggested_tool</span> queda como texto legacy/source.
+          </p>
+        </div>
+        <OutreachPill tone={assignment.assignmentSource === "unmapped_free_text" ? COLORS.amber : assignment.resolvedToolKey ? COLORS.green : COLORS.muted}>
+          {assignment.assignmentSource}
+        </OutreachPill>
+      </div>
+
+      {toolsError && <EmptyState tone={COLORS.amber}>No se pudo cargar lead_magnet_tools: {toolsError.message}</EmptyState>}
+      {!toolsError && (
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <label className="grid gap-1 text-[11px]">
+            <span className="font-medium">Dropdown de catálogo</span>
+            <select
+              value={selectedToolKey}
+              onChange={(event) => setSelectedToolKey(event.target.value)}
+              disabled={loadingTools || saving}
+              className="min-h-11 rounded px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ border: `1px solid ${COLORS.line}`, background: COLORS.paper }}
+            >
+              <option value="">Sin tool canónica asignada</option>
+              {Object.entries(groupedTools).map(([segment, segmentTools]) => (
+                <optgroup key={segment} label={segment}>
+                  {segmentTools.map((tool) => (
+                    <option key={tool.tool_key} value={tool.tool_key}>{toolOptionLabel(tool)}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={saveToolKey}
+            disabled={!dirty || saving || loadingTools}
+            className="self-end rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45"
+            style={{ background: dirty ? COLORS.ink : COLORS.line, color: dirty ? "#fff" : COLORS.muted }}
+          >
+            {saving ? "Guardando…" : "Guardar tool_key"}
+          </button>
+        </div>
+      )}
+
+      <dl className="mt-3 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+        <KeyValue label="leads.tool_key actual" value={assignment.selectedToolKey || "—"} />
+        <KeyValue label="resolved por vista" value={assignment.resolvedToolKey || "—"} />
+        <KeyValue label="nombre resuelto" value={assignment.resolvedToolName || "—"} />
+        <KeyValue label="suggested_tool legacy" value={assignment.suggestedTool || "—"} />
+      </dl>
+      {saveError && <div className="mt-3"><EmptyState tone={COLORS.red}>No se pudo guardar leads.tool_key: {saveError.message}</EmptyState></div>}
+      {saveMessage && <div className="mt-3"><EmptyState tone={COLORS.green}>{saveMessage}</EmptyState></div>}
+      {!assignment.selectedToolKey && assignment.resolvedToolKey && (
+        <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>
+          Sugerencia detectada por alias: <span className="mono">{assignment.resolvedToolKey}</span>. Pulsa Guardar para convertirla en asignación canónica explícita.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function OutreachSection({ brand, onRefresh }) {
   const outreach = brand.outreach;
   const [confirming, setConfirming] = useState(false);
@@ -395,11 +513,14 @@ function OutreachSection({ brand, onRefresh }) {
             ["recipient", outreach.email],
             ["lead_id", outreach.leadId],
             ["sequence_id", sequenceId],
-            ["tool_key", sequence?.tool_key || outreach.lead?.tool_key],
+            ["tool_key", outreach.lead?.toolAssignment?.assigned_tool_key || sequence?.tool_key || outreach.lead?.tool_key],
+            ["resolved tool", outreach.lead?.toolAssignment?.resolved_tool_key],
             ["public tool URL", outreach.toolUrl, outreach.toolUrl],
             ["ready_to_generate", outreach.readyToGenerate ? "true" : "false"],
             ["blockers", outreach.blockers?.join(" · ") || "—"],
           ]} />
+
+          <LeadMagnetToolSelector outreach={outreach} onRefresh={onRefresh} />
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
