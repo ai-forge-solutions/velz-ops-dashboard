@@ -2,8 +2,11 @@ import { outreachActionConfiguredMap } from "./conductorApi";
 import { deriveOutreachStatus, QA_LEAD_ID } from "./outreachStatus";
 
 const VITE_ENV = import.meta.env || {};
-const SUPABASE_URL = VITE_ENV.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = VITE_ENV.VITE_SUPABASE_ANON_KEY;
+
+function envValue(key) {
+  const runtimeEnv = globalThis.__VELZ_RUNTIME_CONFIG__ || {};
+  return runtimeEnv[key] || VITE_ENV[key];
+}
 
 const BRAND_FIELDS = [
   "id",
@@ -86,15 +89,18 @@ const CONTEXT_FIELDS = [
 const OUTREACH_LIMIT = "2000";
 
 function requireSupabaseConfig() {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  const supabaseUrl = envValue("VITE_SUPABASE_URL");
+  const supabaseAnonKey = envValue("VITE_SUPABASE_ANON_KEY");
+
+  if (!supabaseUrl || !supabaseAnonKey) {
     throw new Error(
       "Faltan VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY para leer datos reales de Supabase."
     );
   }
 
   return {
-    url: SUPABASE_URL.replace(/\/$/, ""),
-    key: SUPABASE_ANON_KEY,
+    url: supabaseUrl.replace(/\/$/, ""),
+    key: supabaseAnonKey,
   };
 }
 
@@ -322,7 +328,7 @@ async function loadOutreachForBrands(brands) {
       events: eventsByLead.get(lead.lead_id) || [],
       magnetEvents: magnetEventsByLead.get(lead.lead_id) || [],
       suppression: activeSuppressionForEmail(suppressionsByEmail, email),
-      launchConfigured: Boolean(import.meta.env.VITE_OUTREACH_ORCHESTRATION_BASE_URL || import.meta.env.VITE_OUTREACH_API_BASE_URL),
+      launchConfigured: Boolean(envValue("VITE_OUTREACH_ORCHESTRATION_BASE_URL") || envValue("VITE_OUTREACH_API_BASE_URL")),
       actionConfigured: outreachActionConfiguredMap(),
     })];
   }));
