@@ -1,8 +1,9 @@
 import { outreachActionConfiguredMap } from "./conductorApi";
 import { deriveOutreachStatus, QA_LEAD_ID } from "./outreachStatus";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const VITE_ENV = import.meta.env || {};
+const SUPABASE_URL = VITE_ENV.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = VITE_ENV.VITE_SUPABASE_ANON_KEY;
 
 const BRAND_FIELDS = [
   "id",
@@ -31,7 +32,7 @@ const META_SCRAPE_FIELDS = [
   "service_run_id",
   "ad_count",
   "raw_payload",
-  "created_at",
+  "scraped_at",
 ].join(",");
 
 const META_AD_FIELDS = [
@@ -250,6 +251,16 @@ function idsForInFilter(ids) {
   return Array.from(new Set(ids.filter(Boolean))).join(",");
 }
 
+export function buildMetaScrapeParams(brandIds) {
+  const ids = Array.isArray(brandIds) ? idsForInFilter(brandIds) : brandIds;
+  return new URLSearchParams({
+    select: META_SCRAPE_FIELDS,
+    brand_id: `in.(${ids})`,
+    order: "scraped_at.desc.nullslast",
+    limit: "2000",
+  });
+}
+
 async function loadOutreachForBrands(brands) {
   if (brands.length === 0) return new Map();
   const brandIds = idsForInFilter(brands.map((brand) => brand.id));
@@ -347,12 +358,7 @@ export async function loadDashboardBrands({ limit = 500 } = {}) {
 
   let metaScrapeRows = [];
   try {
-    const scrapeParams = new URLSearchParams({
-      select: META_SCRAPE_FIELDS,
-      brand_id: `in.(${ids})`,
-      order: "created_at.desc.nullslast",
-      limit: "2000",
-    });
+    const scrapeParams = buildMetaScrapeParams(ids);
     metaScrapeRows = await supabaseRest("meta_ad_scrapes", scrapeParams);
   } catch (error) {
     console.warn("No se pudo leer meta_ad_scrapes para enriquecer el resumen Meta Ads", error);

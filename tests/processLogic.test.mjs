@@ -28,6 +28,8 @@ assert.deepEqual(
 
 const defaults = defaultProcessSteps();
 assert.equal(defaults.find((step) => step.id === "brand_context").mode, "preserve_success");
+assert.equal(defaults.find((step) => step.id === "shopify_signals").enabled, true);
+assert.equal(defaults.find((step) => step.id === "shopify_signals").mode, "preserve_success");
 assert.equal(defaults.find((step) => step.id === "email_generation").mode, "overwrite");
 assert.equal(defaults.find((step) => step.id === "email_send").enabled, false);
 
@@ -38,6 +40,7 @@ assert.deepEqual(
     limit: 500,
     steps: [
       { id: "brand_context", mode: "preserve_success", enabled: true },
+      { id: "shopify_signals", mode: "overwrite", enabled: true },
       { id: "meta_ads", mode: "overwrite", enabled: true },
       { id: "email_send", mode: "overwrite", enabled: false },
     ],
@@ -50,6 +53,7 @@ assert.deepEqual(
     filters: { fit_score_min: 70, limit: 500 },
     steps: [
       { id: "brand_context", mode: "preserve_success" },
+      { id: "shopify_signals", mode: "overwrite" },
       { id: "meta_ads", mode: "overwrite" },
     ],
     execution: { strategy: "serial", max_concurrency: 5, continue_on_error: true },
