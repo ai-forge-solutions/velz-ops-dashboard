@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -9,12 +9,16 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  Pencil,
+  Plus,
   Star,
+  Trash2,
   X,
 } from "lucide-react";
 import { loadBrandSource } from "./supabaseData";
 import {
   approveOutreachSequence,
+  editOutreachSequenceDraft,
   generateOutreachSequence,
   launchSaleshandyQaBulk,
   rejectOutreachSequence,
@@ -30,6 +34,13 @@ import {
   statusLabel,
   statusTone,
 } from "./theme";
+import {
+  createSequenceDraftForm,
+  isSequenceDraftEditable,
+  runSequenceDraftSave,
+  sequenceDraftReducer,
+  sequenceIdFor,
+} from "./sequenceDraftEditor";
 
 const SOURCE_LABELS = Object.fromEntries(VERIFICATION_SERVICES.map((service) => [service.source, service.label]));
 
@@ -130,13 +141,57 @@ function JourneyIndicator({ steps = [] }) {
   );
 }
 
-function SequencePreview({ sequence }) {
+function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSave }) {
   if (!sequence) return <EmptyState>No hay draft de secuencia source-backed para este lead todavía.</EmptyState>;
   const followups = Array.isArray(sequence.followups) ? sequence.followups : [];
   const metadata = sequence.source_metadata || sequence.metadata || {};
   const evidence = metadata.evidence_summary || metadata.evidence_sources || sequence.source_refs || sequence.evidence_refs;
+  const isEditing = editor.mode === "edit" || editor.mode === "saving";
+  const isSaving = editor.mode === "saving";
+
+  if (isEditing) {
+    return (
+      <div className="space-y-3">
+        <div className="rounded-md p-3" style={{ background: COLORS.wash }}>
+          <label className="mb-1 block text-[11px] font-medium" htmlFor="sequence-subject">Subject</label>
+          <input id="sequence-subject" value={editor.form.subject} onChange={(event) => dispatchEditor({ type: "field", field: "subject", value: event.target.value })} disabled={isSaving} className="w-full rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
+        </div>
+        <div className="rounded-md p-3" style={{ background: COLORS.wash }}>
+          <label className="mb-1 block text-[11px] font-medium" htmlFor="sequence-initial-email">Initial email body</label>
+          <textarea id="sequence-initial-email" value={editor.form.initial_email} onChange={(event) => dispatchEditor({ type: "field", field: "initial_email", value: event.target.value })} disabled={isSaving} rows={8} className="w-full rounded px-3 py-2 text-xs leading-5" style={{ border: `1px solid ${COLORS.line}` }} />
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] font-medium">Followups</div>
+            <button type="button" onClick={() => dispatchEditor({ type: "addFollowup" })} disabled={isSaving} className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}` }}><Plus size={12} /> Add followup</button>
+          </div>
+          {editor.form.followups.length === 0 ? <EmptyState>No followups in draft. Add one if needed for this MVP edit.</EmptyState> : editor.form.followups.map((followup, index) => (
+            <div key={index} className="space-y-2 rounded-md p-3" style={{ background: COLORS.wash }}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-medium">Followup {index + 1}</div>
+                <button type="button" onClick={() => dispatchEditor({ type: "removeFollowup", index })} disabled={isSaving} className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}><Trash2 size={12} /> Remove</button>
+              </div>
+              <input aria-label={`Followup ${index + 1} subject`} value={followup.subject || ""} onChange={(event) => dispatchEditor({ type: "followup", index, field: "subject", value: event.target.value })} disabled={isSaving} placeholder="Followup subject" className="w-full rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
+              <textarea aria-label={`Followup ${index + 1} body`} value={followup.body || ""} onChange={(event) => dispatchEditor({ type: "followup", index, field: "body", value: event.target.value })} disabled={isSaving} rows={5} placeholder="Followup body" className="w-full rounded px-3 py-2 text-xs leading-5" style={{ border: `1px solid ${COLORS.line}` }} />
+            </div>
+          ))}
+        </div>
+        {editor.error && <EmptyState tone={COLORS.red}>Save failed: {editor.error.message}</EmptyState>}
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={() => dispatchEditor({ type: "cancel", sequence })} disabled={isSaving} className="rounded px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}` }}>Cancel</button>
+          <button type="button" onClick={onSave} disabled={isSaving} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: COLORS.ink, color: "#fff" }}>{isSaving && <Loader2 size={13} className="animate-spin" />}{isSaving ? "Saving…" : "Save draft"}</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
+      <div className="flex justify-end">
+        <button type="button" onClick={() => dispatchEditor({ type: "edit", sequence })} disabled={!editableState.editable} title={editableState.reason || "Edit sequence draft"} className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: editableState.editable ? COLORS.ink : COLORS.muted }}><Pencil size={12} /> Edit draft</button>
+      </div>
+      {!editableState.editable && <EmptyState>{editableState.reason}</EmptyState>}
+      {editor.result?.sequence?.review_status === "pending_review" && <EmptyState tone={COLORS.amber}>Saved. Review is pending again before approval/launch.</EmptyState>}
       <div className="rounded-md p-3" style={{ background: COLORS.wash }}>
         <div className="mb-1 text-[11px] font-medium">Subject</div>
         <div>{sequence.subject || "—"}</div>
@@ -202,13 +257,45 @@ function OutreachSection({ brand, onRefresh }) {
   const send = outreach?.send;
   const provider = outreach?.provider || {};
   const actionConfigured = outreach?.actionConfigured || {};
-  const sequenceId = sequence?.id || sequence?.sequence_id;
+  const sequenceId = sequenceIdFor(sequence);
+  const [sequenceEditor, dispatchSequenceEditor] = useReducer(sequenceDraftReducer, {
+    mode: "view",
+    form: createSequenceDraftForm(sequence),
+    error: null,
+    result: null,
+  });
   const events = Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const magnetEvents = Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const canGenerate = Boolean(outreach?.readyToGenerate && actionConfigured.generate && !outreach?.blockers?.length);
   const canApprove = Boolean(outreach?.canApprove && actionConfigured.approve && sequenceId && !outreach?.blockers?.length);
   const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequenceId);
   const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length);
+  const displayedSequence = sequenceEditor.result?.sequence || sequence;
+  const displayedReviewStatus = displayedSequence?.review_status || outreach?.readiness?.label;
+  const editConfigured = Boolean(actionConfigured.editDraft);
+  const sequenceEditable = isSequenceDraftEditable({ sequence, configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
+
+  useEffect(() => {
+    dispatchSequenceEditor({ type: "cancel", sequence });
+  }, [sequenceId]);
+
+  async function saveSequenceDraft() {
+    dispatchSequenceEditor({ type: "saving" });
+    try {
+      const result = await runSequenceDraftSave({
+        sequenceId,
+        form: sequenceEditor.form,
+        save: editOutreachSequenceDraft,
+        refresh: onRefresh,
+      });
+      dispatchSequenceEditor({ type: "saved", result, sequence });
+      setActionResult(result || { ok: true });
+      setActionError(null);
+    } catch (error) {
+      dispatchSequenceEditor({ type: "failed", error });
+      setActionError(error);
+    }
+  }
 
   async function runAction(action, handler) {
     setBusyAction(action);
@@ -274,9 +361,9 @@ function OutreachSection({ brand, onRefresh }) {
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
             <div className="mb-3 flex items-center justify-between gap-2">
               <h4 className="font-medium">Sequence draft / review</h4>
-              <OutreachPill tone={tone}>{sequence?.review_status || outreach.readiness?.label}</OutreachPill>
+              <OutreachPill tone={tone}>{displayedReviewStatus}</OutreachPill>
             </div>
-            <SequencePreview sequence={sequence} />
+            <SequencePreview sequence={displayedSequence} editor={sequenceEditor} dispatchEditor={dispatchSequenceEditor} editableState={sequenceEditable} onSave={saveSequenceDraft} />
             <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
               <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
               <button onClick={() => runAction("reject", () => rejectOutreachSequence(sequenceId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
