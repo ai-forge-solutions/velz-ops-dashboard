@@ -21,6 +21,8 @@ import {
   editOutreachSequenceDraft,
   generateOutreachSequence,
   launchSaleshandyQaBulk,
+  outreachRuntimeDiagnostics,
+  probeOutreachRuntime,
   rejectOutreachSequence,
   saleshandyQaLaunchConfigured,
 } from "./conductorApi";
@@ -244,12 +246,45 @@ function LaunchResult({ result }) {
   );
 }
 
+function OutreachDiagnostics({ diagnostics, probe, busy, onProbe }) {
+  if (!diagnostics) return null;
+  const keys = diagnostics.runtimeConfigKeys?.join(", ") || "—";
+  return (
+    <section className="rounded-md p-3" style={{ border: `1px dashed ${COLORS.amber}`, background: `${COLORS.amber}0D` }}>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h4 className="font-medium">Outreach config diagnostics</h4>
+        <button type="button" onClick={onProbe} disabled={busy} className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}` }}>
+          {busy && <Loader2 size={12} className="animate-spin" />} Test Outreach API
+        </button>
+      </div>
+      <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <KeyValue label="configured" value={diagnostics.configured ? "true" : "false"} />
+        <KeyValue label="base URL source" value={diagnostics.baseUrlSource} />
+        <KeyValue label="base URL" value={diagnostics.baseUrl || "—"} />
+        <KeyValue label="editDraft path" value={diagnostics.editDraftPath || "—"} />
+        <KeyValue label="editDraft configured" value={diagnostics.editDraftConfigured ? "true" : "false"} />
+        <KeyValue label="runtime config present" value={diagnostics.runtimeConfigPresent ? "true" : "false"} />
+        <KeyValue label="Vite has Outreach base" value={diagnostics.viteHasOutreachBase ? "true" : "false"} />
+        <KeyValue label="runtime VITE keys" value={keys} />
+      </dl>
+      {probe && (
+        <div className="mt-3 rounded p-2 mono text-[10px]" style={{ background: COLORS.paper, border: `1px solid ${probe.ok ? COLORS.green : COLORS.red}33`, color: probe.ok ? COLORS.green : COLORS.red }}>
+          {JSON.stringify(probe, null, 2)}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function OutreachSection({ brand, onRefresh }) {
   const outreach = brand.outreach;
   const [confirming, setConfirming] = useState(false);
   const [busyAction, setBusyAction] = useState(null);
   const [actionResult, setActionResult] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const [diagnostics, setDiagnostics] = useState(() => outreachRuntimeDiagnostics());
+  const [probeResult, setProbeResult] = useState(null);
+  const [probeBusy, setProbeBusy] = useState(false);
   const [rejectNote, setRejectNote] = useState("");
   const configured = saleshandyQaLaunchConfigured();
   const tone = outreachTone(outreach);
@@ -272,12 +307,32 @@ function OutreachSection({ brand, onRefresh }) {
   const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length);
   const displayedSequence = sequenceEditor.result?.sequence || sequence;
   const displayedReviewStatus = displayedSequence?.review_status || outreach?.readiness?.label;
-  const editConfigured = Boolean(actionConfigured.editDraft);
+  // Do not use outreach.actionConfigured.editDraft here: it is captured when
+  // Supabase rows load and can be stale if runtime-config arrives afterwards.
+  // The diagnostics proved the browser resolves the Outreach URL correctly, so
+  // edit gating must read the live runtime config directly on each render.
+  const liveDiagnostics = outreachRuntimeDiagnostics();
+  const editConfigured = Boolean(liveDiagnostics.editDraftConfigured);
   const sequenceEditable = isSequenceDraftEditable({ sequence, configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
 
   useEffect(() => {
     dispatchSequenceEditor({ type: "cancel", sequence });
   }, [sequenceId]);
+
+  useEffect(() => {
+    setDiagnostics(liveDiagnostics);
+  }, [liveDiagnostics.configured, liveDiagnostics.baseUrl, liveDiagnostics.editDraftConfigured, sequenceEditable.reason]);
+
+  async function runOutreachProbe() {
+    setProbeBusy(true);
+    try {
+      const result = await probeOutreachRuntime();
+      setDiagnostics(result.diagnostics || outreachRuntimeDiagnostics());
+      setProbeResult(result);
+    } finally {
+      setProbeBusy(false);
+    }
+  }
 
   async function saveSequenceDraft() {
     dispatchSequenceEditor({ type: "saving" });
@@ -364,6 +419,7 @@ function OutreachSection({ brand, onRefresh }) {
               <OutreachPill tone={tone}>{displayedReviewStatus}</OutreachPill>
             </div>
             <SequencePreview sequence={displayedSequence} editor={sequenceEditor} dispatchEditor={dispatchSequenceEditor} editableState={sequenceEditable} onSave={saveSequenceDraft} />
+            {!sequenceEditable.editable && <div className="mt-3"><OutreachDiagnostics diagnostics={diagnostics} probe={probeResult} busy={probeBusy} onProbe={runOutreachProbe} /></div>}
             <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
               <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
               <button onClick={() => runAction("reject", () => rejectOutreachSequence(sequenceId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>

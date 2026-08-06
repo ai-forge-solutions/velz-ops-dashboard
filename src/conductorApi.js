@@ -48,6 +48,23 @@ function outreachApiBaseUrl() {
   return baseUrl?.replace(/\/$/, "") || null;
 }
 
+function envSource(key) {
+  const runtimeEnv = globalThis.__VELZ_RUNTIME_CONFIG__ || {};
+  if (runtimeEnv[key]) return "runtime-config";
+  if (VITE_ENV[key]) return "vite-build";
+  return "missing";
+}
+
+function redactUrl(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname.replace(/\/$/, "")}`;
+  } catch (error) {
+    return String(value).replace(/\?.*$/, "");
+  }
+}
+
 function normalizeErrorPayload(payload, fallback) {
   if (!payload) return fallback;
   if (typeof payload === "string") return payload;
@@ -190,6 +207,34 @@ export async function getMetaAdLibraryRun(serviceRunId) {
 export function outreachActionConfigured(action) {
   const baseUrl = outreachApiBaseUrl();
   return Boolean(baseUrl && outreachActionPath(action));
+}
+
+export function outreachRuntimeDiagnostics() {
+  const runtimeEnv = globalThis.__VELZ_RUNTIME_CONFIG__ || {};
+  const baseUrl = outreachApiBaseUrl();
+  return {
+    configured: Boolean(baseUrl),
+    baseUrl: redactUrl(baseUrl),
+    baseUrlSource: envSource("VITE_OUTREACH_API_BASE_URL") !== "missing" ? envSource("VITE_OUTREACH_API_BASE_URL") : envSource("VITE_OUTREACH_ORCHESTRATION_BASE_URL"),
+    editDraftPath: outreachActionPath("editDraft"),
+    editDraftConfigured: outreachActionConfigured("editDraft"),
+    runtimeConfigPresent: Boolean(globalThis.__VELZ_RUNTIME_CONFIG__),
+    runtimeConfigKeys: Object.keys(runtimeEnv).filter((key) => key.startsWith("VITE_")).sort(),
+    viteHasOutreachBase: Boolean(VITE_ENV.VITE_OUTREACH_API_BASE_URL || VITE_ENV.VITE_OUTREACH_ORCHESTRATION_BASE_URL),
+  };
+}
+
+export async function probeOutreachRuntime() {
+  const diagnostics = outreachRuntimeDiagnostics();
+  if (!diagnostics.configured) return { ok: false, stage: "config", diagnostics, message: "VITE_OUTREACH_API_BASE_URL missing in browser runtime." };
+  const healthUrl = `${diagnostics.baseUrl}/healthz`;
+  try {
+    const response = await fetch(healthUrl, { method: "GET", headers: { Accept: "application/json" } });
+    const text = await response.text();
+    return { ok: response.ok, stage: "healthz", status: response.status, url: healthUrl, body: text.slice(0, 500), diagnostics };
+  } catch (error) {
+    return { ok: false, stage: "network", url: healthUrl, message: error.message, diagnostics };
+  }
 }
 
 export function outreachActionConfiguredMap() {
