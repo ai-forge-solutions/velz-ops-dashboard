@@ -7,6 +7,7 @@ export const OUTREACH_DEFAULT_ACTION_PATHS = {
   generate: "/outreach/leads/{lead_id}/sequences/generate",
   approve: "/outreach/sequences/{sequence_id}/approve",
   reject: "/outreach/sequences/{sequence_id}/reject",
+  editDraft: "/outreach/sequences/{sequence_id}/draft-fields",
   launch: "/outreach/sequences/{sequence_id}/launch-saleshandy",
 };
 
@@ -14,6 +15,7 @@ const OUTREACH_ACTION_PATHS = {
   generate: VITE_ENV.VITE_OUTREACH_GENERATE_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.generate,
   approve: VITE_ENV.VITE_OUTREACH_APPROVE_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.approve,
   reject: VITE_ENV.VITE_OUTREACH_REJECT_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.reject,
+  editDraft: VITE_ENV.VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH || OUTREACH_DEFAULT_ACTION_PATHS.editDraft,
   launch: VITE_ENV.VITE_OUTREACH_LAUNCH_SALESHANDY_PATH || OUTREACH_DEFAULT_ACTION_PATHS.launch,
 };
 
@@ -101,7 +103,7 @@ export function buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId } =
   return `${baseUrl.replace(/\/$/, "")}${interpolateOutreachPath(path, { leadId, sequenceId })}`;
 }
 
-async function outreachPost(action, { leadId, sequenceId, body = {} }) {
+async function outreachRequest(action, { leadId, sequenceId, body = {}, method = "POST" }) {
   const baseUrl = outreachApiBaseUrl();
   const path = OUTREACH_ACTION_PATHS[action];
   if (!baseUrl || !path) {
@@ -109,7 +111,7 @@ async function outreachPost(action, { leadId, sequenceId, body = {} }) {
   }
 
   const response = await fetch(buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId }), {
-    method: "POST",
+    method,
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
@@ -130,6 +132,14 @@ async function outreachPost(action, { leadId, sequenceId, body = {} }) {
     throw new Error(normalizeErrorPayload(payload, `Outreach ${action} respondió HTTP ${response.status}`));
   }
   return payload;
+}
+
+async function outreachPost(action, payload) {
+  return outreachRequest(action, { ...payload, method: "POST" });
+}
+
+async function outreachPatch(action, payload) {
+  return outreachRequest(action, { ...payload, method: "PATCH" });
 }
 
 export async function runConductorService(brandId, serviceKey) {
@@ -178,6 +188,7 @@ export function outreachActionConfiguredMap() {
     generate: outreachActionConfigured("generate"),
     approve: outreachActionConfigured("approve"),
     reject: outreachActionConfigured("reject"),
+    editDraft: outreachActionConfigured("editDraft"),
     launch: outreachActionConfigured("launch"),
   };
 }
@@ -214,6 +225,13 @@ export async function rejectOutreachSequence(sequenceId, notes = "") {
       reviewed_by: "miguel",
       ...(notes ? { notes } : {}),
     },
+  });
+}
+
+export async function editOutreachSequenceDraft(sequenceId, draftPayload) {
+  return outreachPatch("editDraft", {
+    sequenceId,
+    body: draftPayload,
   });
 }
 
