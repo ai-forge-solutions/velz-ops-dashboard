@@ -28,5 +28,15 @@ assert.equal(
   conductorApi.buildOutreachActionUrl("https://late-runtime-outreach.example.com/", "editDraft", { sequenceId: "seq-late" }),
   "https://late-runtime-outreach.example.com/late/sequences/seq-late/draft",
 );
+assert.deepEqual(conductorApi.outreachRuntimeDiagnostics(), {
+  configured: true,
+  baseUrl: "https://late-runtime-outreach.example.com",
+  baseUrlSource: "runtime-config",
+  editDraftPath: "/late/sequences/{sequence_id}/draft",
+  editDraftConfigured: true,
+  runtimeConfigPresent: true,
+  runtimeConfigKeys: ["VITE_OUTREACH_API_BASE_URL", "VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH"],
+  viteHasOutreachBase: false,
+});
 
 delete globalThis.__VELZ_RUNTIME_CONFIG__;
