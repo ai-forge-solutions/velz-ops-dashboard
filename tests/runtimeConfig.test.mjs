@@ -18,4 +18,15 @@ assert.throws(
   /sequence_id/,
 );
 
+globalThis.__VELZ_RUNTIME_CONFIG__ = {
+  VITE_OUTREACH_API_BASE_URL: "https://late-runtime-outreach.example.com/",
+  VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH: "/late/sequences/{sequence_id}/draft",
+};
+
+assert.equal(conductorApi.outreachActionConfigured("editDraft"), true);
+assert.equal(
+  conductorApi.buildOutreachActionUrl("https://late-runtime-outreach.example.com/", "editDraft", { sequenceId: "seq-late" }),
+  "https://late-runtime-outreach.example.com/late/sequences/seq-late/draft",
+);
+
 delete globalThis.__VELZ_RUNTIME_CONFIG__;
