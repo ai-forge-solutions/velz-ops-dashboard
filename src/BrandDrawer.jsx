@@ -307,7 +307,12 @@ function OutreachSection({ brand, onRefresh }) {
   const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length);
   const displayedSequence = sequenceEditor.result?.sequence || sequence;
   const displayedReviewStatus = displayedSequence?.review_status || outreach?.readiness?.label;
-  const editConfigured = Boolean(actionConfigured.editDraft);
+  // Do not use outreach.actionConfigured.editDraft here: it is captured when
+  // Supabase rows load and can be stale if runtime-config arrives afterwards.
+  // The diagnostics proved the browser resolves the Outreach URL correctly, so
+  // edit gating must read the live runtime config directly on each render.
+  const liveDiagnostics = outreachRuntimeDiagnostics();
+  const editConfigured = Boolean(liveDiagnostics.editDraftConfigured);
   const sequenceEditable = isSequenceDraftEditable({ sequence, configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
 
   useEffect(() => {
@@ -315,8 +320,8 @@ function OutreachSection({ brand, onRefresh }) {
   }, [sequenceId]);
 
   useEffect(() => {
-    setDiagnostics(outreachRuntimeDiagnostics());
-  }, [actionConfigured.editDraft, sequenceEditable.reason]);
+    setDiagnostics(liveDiagnostics);
+  }, [liveDiagnostics.configured, liveDiagnostics.baseUrl, liveDiagnostics.editDraftConfigured, sequenceEditable.reason]);
 
   async function runOutreachProbe() {
     setProbeBusy(true);
