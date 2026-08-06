@@ -2,8 +2,14 @@ import { outreachActionConfiguredMap } from "./conductorApi";
 import { deriveOutreachStatus, QA_LEAD_ID } from "./outreachStatus";
 
 const VITE_ENV = import.meta.env || {};
-const SUPABASE_URL = VITE_ENV.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = VITE_ENV.VITE_SUPABASE_ANON_KEY;
+const RUNTIME_ENV = globalThis.__VELZ_RUNTIME_CONFIG__ || {};
+
+function envValue(key) {
+  return VITE_ENV[key] || RUNTIME_ENV[key];
+}
+
+const SUPABASE_URL = envValue("VITE_SUPABASE_URL");
+const SUPABASE_ANON_KEY = envValue("VITE_SUPABASE_ANON_KEY");
 
 const BRAND_FIELDS = [
   "id",
@@ -322,7 +328,7 @@ async function loadOutreachForBrands(brands) {
       events: eventsByLead.get(lead.lead_id) || [],
       magnetEvents: magnetEventsByLead.get(lead.lead_id) || [],
       suppression: activeSuppressionForEmail(suppressionsByEmail, email),
-      launchConfigured: Boolean(import.meta.env.VITE_OUTREACH_ORCHESTRATION_BASE_URL || import.meta.env.VITE_OUTREACH_API_BASE_URL),
+      launchConfigured: Boolean(envValue("VITE_OUTREACH_ORCHESTRATION_BASE_URL") || envValue("VITE_OUTREACH_API_BASE_URL")),
       actionConfigured: outreachActionConfiguredMap(),
     })];
   }));

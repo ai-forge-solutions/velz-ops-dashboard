@@ -1,8 +1,14 @@
 const DEFAULT_CONDUCTOR_BASE_URL =
   "https://velz-signals-conductor-stg.blackocean-de4b65c4.westeurope.azurecontainerapps.io";
 const VITE_ENV = import.meta.env || {};
-const OUTREACH_ORCHESTRATION_BASE_URL = VITE_ENV.VITE_OUTREACH_ORCHESTRATION_BASE_URL;
-const OUTREACH_API_BASE_URL = VITE_ENV.VITE_OUTREACH_API_BASE_URL || OUTREACH_ORCHESTRATION_BASE_URL;
+const RUNTIME_ENV = globalThis.__VELZ_RUNTIME_CONFIG__ || {};
+
+function envValue(key) {
+  return VITE_ENV[key] || RUNTIME_ENV[key];
+}
+
+const OUTREACH_ORCHESTRATION_BASE_URL = envValue("VITE_OUTREACH_ORCHESTRATION_BASE_URL");
+const OUTREACH_API_BASE_URL = envValue("VITE_OUTREACH_API_BASE_URL") || OUTREACH_ORCHESTRATION_BASE_URL;
 export const OUTREACH_DEFAULT_ACTION_PATHS = {
   generate: "/outreach/leads/{lead_id}/sequences/generate",
   approve: "/outreach/sequences/{sequence_id}/approve",
@@ -12,11 +18,11 @@ export const OUTREACH_DEFAULT_ACTION_PATHS = {
 };
 
 const OUTREACH_ACTION_PATHS = {
-  generate: VITE_ENV.VITE_OUTREACH_GENERATE_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.generate,
-  approve: VITE_ENV.VITE_OUTREACH_APPROVE_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.approve,
-  reject: VITE_ENV.VITE_OUTREACH_REJECT_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.reject,
-  editDraft: VITE_ENV.VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH || OUTREACH_DEFAULT_ACTION_PATHS.editDraft,
-  launch: VITE_ENV.VITE_OUTREACH_LAUNCH_SALESHANDY_PATH || OUTREACH_DEFAULT_ACTION_PATHS.launch,
+  generate: envValue("VITE_OUTREACH_GENERATE_SEQUENCE_PATH") || OUTREACH_DEFAULT_ACTION_PATHS.generate,
+  approve: envValue("VITE_OUTREACH_APPROVE_SEQUENCE_PATH") || OUTREACH_DEFAULT_ACTION_PATHS.approve,
+  reject: envValue("VITE_OUTREACH_REJECT_SEQUENCE_PATH") || OUTREACH_DEFAULT_ACTION_PATHS.reject,
+  editDraft: envValue("VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH") || OUTREACH_DEFAULT_ACTION_PATHS.editDraft,
+  launch: envValue("VITE_OUTREACH_LAUNCH_SALESHANDY_PATH") || OUTREACH_DEFAULT_ACTION_PATHS.launch,
 };
 
 export const CONDUCTOR_ENDPOINTS = {
@@ -32,7 +38,7 @@ export function conductorServiceAvailable(serviceKey) {
 }
 
 function conductorBaseUrl() {
-  return (VITE_ENV.VITE_CONDUCTOR_BASE_URL || DEFAULT_CONDUCTOR_BASE_URL).replace(/\/$/, "");
+  return (envValue("VITE_CONDUCTOR_BASE_URL") || DEFAULT_CONDUCTOR_BASE_URL).replace(/\/$/, "");
 }
 
 function outreachApiBaseUrl() {
