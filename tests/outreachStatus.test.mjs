@@ -156,7 +156,7 @@ assert.equal(pendingMissingToolUrl.readiness.key, "pending_review");
 assert.equal(pendingMissingToolUrl.canApprove, true);
 assert.deepEqual(pendingMissingToolUrl.blockers, []);
 assert.match(pendingMissingToolUrl.warnings.join(" "), /missing tool URL/i);
-assert.deepEqual(pendingMissingToolUrl.launchBlockers, ["missing tool URL"]);
+assert.deepEqual(pendingMissingToolUrl.launchBlockers, []);
 
 const pendingBackendMissingToolUrl = deriveOutreachStatus({
   leadId: "lead-with-backend-warning",
@@ -205,7 +205,7 @@ const approvedNotScheduled = deriveOutreachStatus({
 assert.equal(approvedNotScheduled.readiness.key, "approved");
 assert.equal(approvedNotScheduled.launchEligible, true);
 assert.deepEqual(deriveOutreachFilters(approvedNotScheduled), ["ready_to_launch"]);
-assert.deepEqual(approvedNotScheduled.launchBlockers, ["missing tool URL"]);
+assert.deepEqual(approvedNotScheduled.launchBlockers, []);
 
 assert.deepEqual(deriveOutreachFilters(pendingDryRun), ["needs_review"]);
 assert.deepEqual(deriveOutreachFilters(delivered), ["launched", "engaged"]);

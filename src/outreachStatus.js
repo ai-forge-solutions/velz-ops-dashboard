@@ -223,9 +223,7 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
     }
   }
   if (sequence && !toolUrl) {
-    const message = "missing tool URL — ok for copy review; required only before launch if the Saleshandy template references it";
-    warnings.push(message);
-    launchBlockers.push("missing tool URL");
+    warnings.push("missing tool URL — ok for copy review and current no-link launch strategy");
   }
   const sendStatus = normalize(send?.status || send?.send_status);
   const providerImportStatus = normalize(send?.provider_import_status || send?.import_status);
