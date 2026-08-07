@@ -77,6 +77,10 @@ function pickFirst(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "") ?? null;
 }
 
+function isMissingToolUrl(value) {
+  return normalize(value).replace(/[_-]/g, " ").includes("missing tool url");
+}
+
 export function publicToolUrl(sequence, lead) {
   const metadata = pickMetadata(sequence);
   return (
@@ -202,6 +206,8 @@ function buildJourney({ readinessKey, lifecycleKey, flags, sequence }) {
 
 export function deriveOutreachStatus({ leadId, lead, sequence, send, events = [], magnetEvents = [], suppression, launchConfigured = false, actionConfigured = {} } = {}) {
   const blockers = [];
+  const warnings = [];
+  const launchBlockers = [];
   const readModel = lead?.outreach || lead?.outreach_status || lead?.outreach_read_model || sequence?.read_model || {};
   const email = recipientEmail(sequence, lead);
   const toolUrl = publicToolUrl(sequence, lead);
@@ -210,9 +216,17 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
 
   const backendBlockers = readModel?.blockers || lead?.outreach_blockers || sequence?.blockers || sequence?.readiness_blockers;
   if (Array.isArray(backendBlockers)) {
-    for (const blocker of backendBlockers) blockers.push(typeof blocker === "string" ? blocker : blocker?.message || blocker?.reason || JSON.stringify(blocker));
+    for (const blocker of backendBlockers) {
+      const message = typeof blocker === "string" ? blocker : blocker?.message || blocker?.reason || JSON.stringify(blocker);
+      if (isMissingToolUrl(message)) warnings.push(message);
+      else blockers.push(message);
+    }
   }
-  if (sequence && !toolUrl) blockers.push("missing tool URL");
+  if (sequence && !toolUrl) {
+    const message = "missing tool URL — ok for copy review; required only before launch if the Saleshandy template references it";
+    warnings.push(message);
+    launchBlockers.push("missing tool URL");
+  }
   const sendStatus = normalize(send?.status || send?.send_status);
   const providerImportStatus = normalize(send?.provider_import_status || send?.import_status);
   if ([sendStatus, providerImportStatus].some((value) => ["failed", "error", "bounced", "rejected"].includes(value))) blockers.push("provider/send failure");
@@ -250,6 +264,8 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
     magnetEvents: magnetSummary,
     suppression: activeSuppression,
     blockers,
+    warnings,
+    launchBlockers,
     readyToGenerate: flags.readyToGenerate || readinessKey === "ready_to_generate",
     canApprove: flags.canApprove || readinessKey === "pending_review",
     canReject: flags.canReject || readinessKey === "pending_review",

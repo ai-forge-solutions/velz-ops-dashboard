@@ -208,7 +208,7 @@ function OutreachSection({ brand, onRefresh }) {
   const canGenerate = Boolean(outreach?.readyToGenerate && actionConfigured.generate && !outreach?.blockers?.length);
   const canApprove = Boolean(outreach?.canApprove && actionConfigured.approve && sequenceId && !outreach?.blockers?.length);
   const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequenceId);
-  const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length);
+  const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length && !outreach?.launchBlockers?.length);
 
   async function runAction(action, handler) {
     setBusyAction(action);
@@ -247,6 +247,7 @@ function OutreachSection({ brand, onRefresh }) {
           <JourneyIndicator steps={outreach.journey} />
           {outreach.suppression && <EmptyState tone={COLORS.red}>Suppression activa: {outreach.suppression.reason || outreach.suppression.type || "sin motivo"}. No enviar.</EmptyState>}
           {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
+          {outreach.warnings?.length > 0 && <EmptyState tone={COLORS.amber}>Avisos no bloqueantes: {outreach.warnings.join(" · ")}</EmptyState>}
           <EmptyState tone={outreach.blockers?.length ? COLORS.amber : COLORS.green}>Siguiente acción: {outreach.nextAction?.label}</EmptyState>
 
           <KeyValueList title="Readiness checks" values={[
@@ -257,6 +258,7 @@ function OutreachSection({ brand, onRefresh }) {
             ["public tool URL", outreach.toolUrl, outreach.toolUrl],
             ["ready_to_generate", outreach.readyToGenerate ? "true" : "false"],
             ["blockers", outreach.blockers?.join(" · ") || "—"],
+            ["warnings", outreach.warnings?.join(" · ") || "—"],
           ]} />
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
@@ -310,6 +312,7 @@ function OutreachSection({ brand, onRefresh }) {
             {!configured && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/sequences/{'{sequence_id}'}/launch-saleshandy. VITE_OUTREACH_ORCHESTRATION_BASE_URL queda solo como alias legacy.</p>}
             {configured && !sequenceId && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: el read model aún no expone sequence_id; approve/reject/launch no usan lead_id como fallback.</p>}
             {configured && !outreach.launchEligible && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada por el read model: launch solo aparece cuando backend marca launch-ready y no hay estado final/bloqueado.</p>}
+            {configured && outreach.launchBlockers?.length > 0 && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Launch bloqueado hasta resolver: {outreach.launchBlockers.join(" · ")}. Aprobar la copy sigue permitido y no envía nada.</p>}
           </div>
 
           <KeyValueList title="Engagement / tool activity" values={[
