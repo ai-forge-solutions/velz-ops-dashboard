@@ -236,7 +236,8 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
   const readinessKey = readinessFrom({ lead, sequence, suppression: activeSuppression, blockers, readModel });
   const lifecycleKey = lifecycleFrom({ sequence, send, eventsSummary, suppression: activeSuppression, readModel });
   const qaEligible = leadId === QA_LEAD_ID && email === QA_RECIPIENT && !activeSuppression && Boolean(sequence) && Boolean(toolUrl);
-  const flags = actionFlags({ lead, sequence, send, readModel, launchEligible: qaEligible && ["approved", "launch_ready"].includes(readinessKey) });
+  const approvedCopyReady = Boolean(sequence) && !activeSuppression && ["approved", "launch_ready"].includes(readinessKey);
+  const flags = actionFlags({ lead, sequence, send, readModel, launchEligible: approvedCopyReady || (qaEligible && ["approved", "launch_ready"].includes(readinessKey)) });
   const configured = {
     generate: Boolean(actionConfigured.generate),
     approve: Boolean(actionConfigured.approve),

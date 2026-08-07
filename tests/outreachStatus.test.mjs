@@ -185,6 +185,28 @@ assert.equal(suppressed.readiness.key, "blocked");
 assert.equal(suppressed.lifecycle.key, "suppressed");
 assert.match(suppressed.blockers.join(" "), /suppression/i);
 
+const approvedNotScheduled = deriveOutreachStatus({
+  leadId: "lead-approved",
+  lead: { primary_email: "buyer@example.com" },
+  sequence: {
+    ...baseSequence,
+    id: "seq-approved-no-tool",
+    lead_id: "lead-approved",
+    review_status: "approved",
+    send_status: "not_scheduled",
+    metadata: { recipient_email: "buyer@example.com" },
+  },
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { launch: true },
+});
+assert.equal(approvedNotScheduled.readiness.key, "approved");
+assert.equal(approvedNotScheduled.launchEligible, true);
+assert.deepEqual(deriveOutreachFilters(approvedNotScheduled), ["ready_to_launch"]);
+assert.deepEqual(approvedNotScheduled.launchBlockers, ["missing tool URL"]);
+
 assert.deepEqual(deriveOutreachFilters(pendingDryRun), ["needs_review"]);
 assert.deepEqual(deriveOutreachFilters(delivered), ["launched", "engaged"]);
 assert.deepEqual(deriveOutreachFilters(suppressed), ["failed_blocked", "suppressed"]);
