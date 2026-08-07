@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   OUTREACH_DEFAULT_ACTION_PATHS,
   buildOutreachActionUrl,
+  normalizeErrorPayload,
 } from "../src/conductorApi.js";
 import {
   deriveOutreachFilters,
@@ -40,6 +41,9 @@ assert.equal(
   "https://outreach.example.com/outreach/sequences/seq-1/launch-saleshandy",
 );
 assert.throws(() => buildOutreachActionUrl("https://outreach.example.com", "launch", { leadId: qaLeadId }), /sequence_id/);
+assert.equal(normalizeErrorPayload({ detail: { blocker: "send_kill_switch_enabled" } }, "fallback"), "send_kill_switch_enabled");
+assert.equal(normalizeErrorPayload({ detail: { error: "runtime_configuration_missing", message: "SUPABASE_URL missing" } }, "fallback"), "SUPABASE_URL missing");
+assert.equal(normalizeErrorPayload({ detail: { blockers: ["a", "b"] } }, "fallback"), '{"blockers":["a","b"]}');
 
 const baseSequence = {
   id: "seq-1",
