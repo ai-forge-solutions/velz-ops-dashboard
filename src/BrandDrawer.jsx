@@ -597,6 +597,8 @@ function OutreachSection({ brand, onRefresh }) {
           <div className="max-w-lg rounded-lg p-5 shadow-2xl" style={{ background: COLORS.paper, border: `1px solid ${COLORS.line}` }}>
             <h3 className="mb-2 text-base font-medium">Confirmar launch Saleshandy real</h3>
             <p className="mb-3 text-xs leading-5" style={{ color: COLORS.muted }}>Esto llama al backend de Outreach y puede crear/importar un prospect real en Saleshandy. No es una llamada browser → Saleshandy; conserva guardrails backend, QA/non-QA y idempotencia.</p>
+            {busyAction === "launch" && <EmptyState>Launching… esperando respuesta del backend.</EmptyState>}
+            {actionError && <EmptyState tone={COLORS.red}>Launch failed: {actionError.message}</EmptyState>}
             <dl className="mb-4 grid gap-2 text-xs">
               <KeyValue label="recipient" value={outreach?.email} />
               <KeyValue label="lead_id" value={outreach?.leadId} />
