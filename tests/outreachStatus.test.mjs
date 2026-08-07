@@ -142,6 +142,36 @@ const launchReady = deriveOutreachStatus({
 assert.equal(launchReady.launchEligible, true);
 assert.equal(launchReady.nextAction.key, "launch");
 
+const pendingMissingToolUrl = deriveOutreachStatus({
+  leadId: "lead-with-draft",
+  lead: { primary_email: "buyer@example.com" },
+  sequence: { ...baseSequence, id: "seq-no-tool", metadata: { recipient_email: "buyer@example.com" } },
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { approve: true, launch: true },
+});
+assert.equal(pendingMissingToolUrl.readiness.key, "pending_review");
+assert.equal(pendingMissingToolUrl.canApprove, true);
+assert.deepEqual(pendingMissingToolUrl.blockers, []);
+assert.match(pendingMissingToolUrl.warnings.join(" "), /missing tool URL/i);
+assert.deepEqual(pendingMissingToolUrl.launchBlockers, ["missing tool URL"]);
+
+const pendingBackendMissingToolUrl = deriveOutreachStatus({
+  leadId: "lead-with-backend-warning",
+  lead: { primary_email: "buyer@example.com", outreach_blockers: ["missing tool URL"] },
+  sequence: { ...baseSequence, id: "seq-backend-no-tool", metadata: { recipient_email: "buyer@example.com" } },
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { approve: true },
+});
+assert.equal(pendingBackendMissingToolUrl.canApprove, true);
+assert.deepEqual(pendingBackendMissingToolUrl.blockers, []);
+assert.match(pendingBackendMissingToolUrl.warnings.join(" "), /missing tool URL/i);
+
 const suppressed = deriveOutreachStatus({
   leadId: qaLeadId,
   lead: { primary_email: "miguelcarmonar@gmail.com" },
