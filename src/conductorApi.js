@@ -65,12 +65,24 @@ function redactUrl(value) {
   }
 }
 
-function normalizeErrorPayload(payload, fallback) {
+export function normalizeErrorPayload(payload, fallback) {
   if (!payload) return fallback;
   if (typeof payload === "string") return payload;
-  if (payload.detail) return Array.isArray(payload.detail) ? JSON.stringify(payload.detail) : String(payload.detail);
-  if (payload.message) return String(payload.message);
-  return fallback;
+  if (Array.isArray(payload)) return JSON.stringify(payload);
+  if (typeof payload !== "object") return String(payload);
+
+  const directMessage = payload.message || payload.error || payload.blocker;
+  if (directMessage) return normalizeErrorPayload(directMessage, fallback);
+  if (payload.detail) {
+    const detailMessage = normalizeErrorPayload(payload.detail, "");
+    return detailMessage || fallback;
+  }
+
+  try {
+    return JSON.stringify(payload);
+  } catch (error) {
+    return fallback;
+  }
 }
 
 async function conductorRequest(path, options = {}) {
