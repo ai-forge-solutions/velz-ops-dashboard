@@ -1,21 +1,31 @@
 const DEFAULT_CONDUCTOR_BASE_URL =
   "https://velz-signals-conductor-stg.blackocean-de4b65c4.westeurope.azurecontainerapps.io";
 const VITE_ENV = import.meta.env || {};
-const OUTREACH_ORCHESTRATION_BASE_URL = VITE_ENV.VITE_OUTREACH_ORCHESTRATION_BASE_URL;
-const OUTREACH_API_BASE_URL = VITE_ENV.VITE_OUTREACH_API_BASE_URL || OUTREACH_ORCHESTRATION_BASE_URL;
+
+function envValue(key) {
+  const runtimeEnv = globalThis.__VELZ_RUNTIME_CONFIG__ || {};
+  return runtimeEnv[key] || VITE_ENV[key];
+}
+
 export const OUTREACH_DEFAULT_ACTION_PATHS = {
   generate: "/outreach/leads/{lead_id}/sequences/generate",
   approve: "/outreach/sequences/{sequence_id}/approve",
   reject: "/outreach/sequences/{sequence_id}/reject",
+  editDraft: "/outreach/sequences/{sequence_id}/draft-fields",
   launch: "/outreach/sequences/{sequence_id}/launch-saleshandy",
 };
 
-const OUTREACH_ACTION_PATHS = {
-  generate: VITE_ENV.VITE_OUTREACH_GENERATE_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.generate,
-  approve: VITE_ENV.VITE_OUTREACH_APPROVE_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.approve,
-  reject: VITE_ENV.VITE_OUTREACH_REJECT_SEQUENCE_PATH || OUTREACH_DEFAULT_ACTION_PATHS.reject,
-  launch: VITE_ENV.VITE_OUTREACH_LAUNCH_SALESHANDY_PATH || OUTREACH_DEFAULT_ACTION_PATHS.launch,
+const OUTREACH_ACTION_ENV_KEYS = {
+  generate: "VITE_OUTREACH_GENERATE_SEQUENCE_PATH",
+  approve: "VITE_OUTREACH_APPROVE_SEQUENCE_PATH",
+  reject: "VITE_OUTREACH_REJECT_SEQUENCE_PATH",
+  editDraft: "VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH",
+  launch: "VITE_OUTREACH_LAUNCH_SALESHANDY_PATH",
 };
+
+function outreachActionPath(action) {
+  return envValue(OUTREACH_ACTION_ENV_KEYS[action]) || OUTREACH_DEFAULT_ACTION_PATHS[action];
+}
 
 export const CONDUCTOR_ENDPOINTS = {
   meta_ad_library_scraper: "/microservices/meta-ad-library",
@@ -30,11 +40,29 @@ export function conductorServiceAvailable(serviceKey) {
 }
 
 function conductorBaseUrl() {
-  return (VITE_ENV.VITE_CONDUCTOR_BASE_URL || DEFAULT_CONDUCTOR_BASE_URL).replace(/\/$/, "");
+  return (envValue("VITE_CONDUCTOR_BASE_URL") || DEFAULT_CONDUCTOR_BASE_URL).replace(/\/$/, "");
 }
 
 function outreachApiBaseUrl() {
-  return OUTREACH_API_BASE_URL?.replace(/\/$/, "") || null;
+  const baseUrl = envValue("VITE_OUTREACH_API_BASE_URL") || envValue("VITE_OUTREACH_ORCHESTRATION_BASE_URL");
+  return baseUrl?.replace(/\/$/, "") || null;
+}
+
+function envSource(key) {
+  const runtimeEnv = globalThis.__VELZ_RUNTIME_CONFIG__ || {};
+  if (runtimeEnv[key]) return "runtime-config";
+  if (VITE_ENV[key]) return "vite-build";
+  return "missing";
+}
+
+function redactUrl(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname.replace(/\/$/, "")}`;
+  } catch (error) {
+    return String(value).replace(/\?.*$/, "");
+  }
 }
 
 function normalizeErrorPayload(payload, fallback) {
@@ -94,22 +122,22 @@ function interpolateOutreachPath(path, { leadId, sequenceId }) {
 }
 
 export function buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId } = {}) {
-  const path = OUTREACH_ACTION_PATHS[action];
+  const path = outreachActionPath(action);
   if (!baseUrl || !path) return null;
   if (path.match(/(:leadId|\{lead_?id\})/) && !leadId) throw new Error(`Falta lead_id para Outreach ${action}.`);
   if (path.match(/(:sequenceId|\{sequence_?id\})/) && !sequenceId) throw new Error(`Falta sequence_id para Outreach ${action}.`);
   return `${baseUrl.replace(/\/$/, "")}${interpolateOutreachPath(path, { leadId, sequenceId })}`;
 }
 
-async function outreachPost(action, { leadId, sequenceId, body = {} }) {
+async function outreachRequest(action, { leadId, sequenceId, body = {}, method = "POST" }) {
   const baseUrl = outreachApiBaseUrl();
-  const path = OUTREACH_ACTION_PATHS[action];
+  const path = outreachActionPath(action);
   if (!baseUrl || !path) {
     throw new Error(`Endpoint Outreach ${action} no configurado. Define VITE_OUTREACH_API_BASE_URL; las rutas reales de Outreach tienen defaults seguros.`);
   }
 
   const response = await fetch(buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId }), {
-    method: "POST",
+    method,
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
@@ -130,6 +158,14 @@ async function outreachPost(action, { leadId, sequenceId, body = {} }) {
     throw new Error(normalizeErrorPayload(payload, `Outreach ${action} respondió HTTP ${response.status}`));
   }
   return payload;
+}
+
+async function outreachPost(action, payload) {
+  return outreachRequest(action, { ...payload, method: "POST" });
+}
+
+async function outreachPatch(action, payload) {
+  return outreachRequest(action, { ...payload, method: "PATCH" });
 }
 
 export async function runConductorService(brandId, serviceKey) {
@@ -170,7 +206,35 @@ export async function getMetaAdLibraryRun(serviceRunId) {
 
 export function outreachActionConfigured(action) {
   const baseUrl = outreachApiBaseUrl();
-  return Boolean(baseUrl && OUTREACH_ACTION_PATHS[action]);
+  return Boolean(baseUrl && outreachActionPath(action));
+}
+
+export function outreachRuntimeDiagnostics() {
+  const runtimeEnv = globalThis.__VELZ_RUNTIME_CONFIG__ || {};
+  const baseUrl = outreachApiBaseUrl();
+  return {
+    configured: Boolean(baseUrl),
+    baseUrl: redactUrl(baseUrl),
+    baseUrlSource: envSource("VITE_OUTREACH_API_BASE_URL") !== "missing" ? envSource("VITE_OUTREACH_API_BASE_URL") : envSource("VITE_OUTREACH_ORCHESTRATION_BASE_URL"),
+    editDraftPath: outreachActionPath("editDraft"),
+    editDraftConfigured: outreachActionConfigured("editDraft"),
+    runtimeConfigPresent: Boolean(globalThis.__VELZ_RUNTIME_CONFIG__),
+    runtimeConfigKeys: Object.keys(runtimeEnv).filter((key) => key.startsWith("VITE_")).sort(),
+    viteHasOutreachBase: Boolean(VITE_ENV.VITE_OUTREACH_API_BASE_URL || VITE_ENV.VITE_OUTREACH_ORCHESTRATION_BASE_URL),
+  };
+}
+
+export async function probeOutreachRuntime() {
+  const diagnostics = outreachRuntimeDiagnostics();
+  if (!diagnostics.configured) return { ok: false, stage: "config", diagnostics, message: "VITE_OUTREACH_API_BASE_URL missing in browser runtime." };
+  const healthUrl = `${diagnostics.baseUrl}/healthz`;
+  try {
+    const response = await fetch(healthUrl, { method: "GET", headers: { Accept: "application/json" } });
+    const text = await response.text();
+    return { ok: response.ok, stage: "healthz", status: response.status, url: healthUrl, body: text.slice(0, 500), diagnostics };
+  } catch (error) {
+    return { ok: false, stage: "network", url: healthUrl, message: error.message, diagnostics };
+  }
 }
 
 export function outreachActionConfiguredMap() {
@@ -178,6 +242,7 @@ export function outreachActionConfiguredMap() {
     generate: outreachActionConfigured("generate"),
     approve: outreachActionConfigured("approve"),
     reject: outreachActionConfigured("reject"),
+    editDraft: outreachActionConfigured("editDraft"),
     launch: outreachActionConfigured("launch"),
   };
 }
@@ -214,6 +279,13 @@ export async function rejectOutreachSequence(sequenceId, notes = "") {
       reviewed_by: "miguel",
       ...(notes ? { notes } : {}),
     },
+  });
+}
+
+export async function editOutreachSequenceDraft(sequenceId, draftPayload) {
+  return outreachPatch("editDraft", {
+    sequenceId,
+    body: draftPayload,
   });
 }
 

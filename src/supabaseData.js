@@ -1,8 +1,12 @@
 import { outreachActionConfiguredMap } from "./conductorApi";
 import { deriveOutreachStatus, QA_LEAD_ID } from "./outreachStatus";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const VITE_ENV = import.meta.env || {};
+
+function envValue(key) {
+  const runtimeEnv = globalThis.__VELZ_RUNTIME_CONFIG__ || {};
+  return runtimeEnv[key] || VITE_ENV[key];
+}
 
 const BRAND_FIELDS = [
   "id",
@@ -31,7 +35,7 @@ const META_SCRAPE_FIELDS = [
   "service_run_id",
   "ad_count",
   "raw_payload",
-  "created_at",
+  "scraped_at",
 ].join(",");
 
 const META_AD_FIELDS = [
@@ -84,16 +88,40 @@ const CONTEXT_FIELDS = [
 
 const OUTREACH_LIMIT = "2000";
 
+const LEAD_MAGNET_TOOL_FIELDS = [
+  "tool_key",
+  "display_name",
+  "segment",
+  "description",
+  "required_signals",
+  "status",
+].join(",");
+
+const LEAD_MAGNET_ASSIGNMENT_FIELDS = [
+  "lead_id",
+  "brand_id",
+  "suggested_tool",
+  "assigned_tool_key",
+  "resolved_tool_key",
+  "resolved_tool_name",
+  "resolved_segment",
+  "required_signals",
+  "assignment_source",
+].join(",");
+
 function requireSupabaseConfig() {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  const supabaseUrl = envValue("VITE_SUPABASE_URL");
+  const supabaseAnonKey = envValue("VITE_SUPABASE_ANON_KEY");
+
+  if (!supabaseUrl || !supabaseAnonKey) {
     throw new Error(
       "Faltan VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY para leer datos reales de Supabase."
     );
   }
 
   return {
-    url: SUPABASE_URL.replace(/\/$/, ""),
-    key: SUPABASE_ANON_KEY,
+    url: supabaseUrl.replace(/\/$/, ""),
+    key: supabaseAnonKey,
   };
 }
 
@@ -116,6 +144,37 @@ async function supabaseRest(path, searchParams = new URLSearchParams()) {
   }
 
   return response.json();
+}
+
+async function supabaseRpc(functionName, body) {
+  const { url, key } = requireSupabaseConfig();
+  const response = await fetch(`${url}/rest/v1/rpc/${functionName}`, {
+    method: "POST",
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await response.text();
+  let payload = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (error) {
+      payload = text;
+    }
+  }
+
+  if (!response.ok) {
+    const message = typeof payload === "string" ? payload : payload?.message || JSON.stringify(payload);
+    throw new Error(`Supabase RPC ${functionName} respondió ${response.status}: ${message}`);
+  }
+
+  return payload;
 }
 
 function toDashboardBrand(row) {
@@ -250,6 +309,16 @@ function idsForInFilter(ids) {
   return Array.from(new Set(ids.filter(Boolean))).join(",");
 }
 
+export function buildMetaScrapeParams(brandIds) {
+  const ids = Array.isArray(brandIds) ? idsForInFilter(brandIds) : brandIds;
+  return new URLSearchParams({
+    select: META_SCRAPE_FIELDS,
+    brand_id: `in.(${ids})`,
+    order: "scraped_at.desc.nullslast",
+    limit: "2000",
+  });
+}
+
 async function loadOutreachForBrands(brands) {
   if (brands.length === 0) return new Map();
   const brandIds = idsForInFilter(brands.map((brand) => brand.id));
@@ -267,12 +336,14 @@ async function loadOutreachForBrands(brands) {
   const sendParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "updated_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
   const eventParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "event_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
   const magnetParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "event_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
+  const assignmentParams = new URLSearchParams({ select: LEAD_MAGNET_ASSIGNMENT_FIELDS, lead_id: `in.(${leadIds})`, limit: OUTREACH_LIMIT });
 
-  const [sequences, sends, events, magnetEvents] = await Promise.all([
+  const [sequences, sends, events, magnetEvents, toolAssignments] = await Promise.all([
     supabaseRest("email_sequences", sequenceParams),
     supabaseRest("email_sends", sendParams),
     supabaseRest("email_events", eventParams),
     supabaseRest("lead_magnet_events", magnetParams),
+    supabaseRest("v_lead_magnet_tool_assignments", assignmentParams),
   ]);
 
   let suppressions = [];
@@ -293,6 +364,7 @@ async function loadOutreachForBrands(brands) {
   const sendsByLead = groupBy(sends, "lead_id");
   const eventsByLead = groupBy(events, "lead_id");
   const magnetEventsByLead = groupBy(magnetEvents, "lead_id");
+  const toolAssignmentByLead = new Map((toolAssignments || []).filter((row) => row?.lead_id).map((row) => [row.lead_id, row]));
   const suppressionsByEmail = groupBy(suppressions.map((row) => ({ ...row, email: String(row.email_address || row.recipient_email || "").toLowerCase() })), "email");
 
   return new Map(brands.map((brand) => {
@@ -303,15 +375,20 @@ async function loadOutreachForBrands(brands) {
     const sendRows = sendsByLead.get(lead.lead_id) || [];
     const send = latestOutreachRow(sequence?.id ? sendRows.filter((row) => row.email_sequence_id === sequence.id) : sendRows);
     const email = lead.primary_email || lead.email;
+    const toolAssignment = toolAssignmentByLead.get(lead.lead_id) || null;
     return [brand.id, deriveOutreachStatus({
       leadId: lead.lead_id,
-      lead,
+      lead: {
+        ...lead,
+        toolAssignment,
+        tool_key: toolAssignment?.assigned_tool_key ?? lead.tool_key,
+      },
       sequence,
       send,
       events: eventsByLead.get(lead.lead_id) || [],
       magnetEvents: magnetEventsByLead.get(lead.lead_id) || [],
       suppression: activeSuppressionForEmail(suppressionsByEmail, email),
-      launchConfigured: Boolean(import.meta.env.VITE_OUTREACH_ORCHESTRATION_BASE_URL || import.meta.env.VITE_OUTREACH_API_BASE_URL),
+      launchConfigured: Boolean(envValue("VITE_OUTREACH_ORCHESTRATION_BASE_URL") || envValue("VITE_OUTREACH_API_BASE_URL")),
       actionConfigured: outreachActionConfiguredMap(),
     })];
   }));
@@ -323,6 +400,22 @@ function attachOutreach(brands, outreachByBrand, error = null) {
     outreach: outreachByBrand?.get(brand.id) || null,
     outreachLoadError: error,
   }));
+}
+
+export async function loadLeadMagnetTools() {
+  const params = new URLSearchParams({
+    select: LEAD_MAGNET_TOOL_FIELDS,
+    order: "segment.asc,display_name.asc",
+  });
+  return supabaseRest("lead_magnet_tools", params);
+}
+
+export async function setLeadMagnetToolKey(leadId, toolKey) {
+  if (!leadId) throw new Error("Falta lead_id para asignar lead magnet/tool.");
+  return supabaseRpc("set_lead_magnet_tool_key", {
+    p_lead_id: leadId,
+    p_tool_key: toolKey || null,
+  });
 }
 
 export async function loadDashboardBrands({ limit = 500 } = {}) {
@@ -347,12 +440,7 @@ export async function loadDashboardBrands({ limit = 500 } = {}) {
 
   let metaScrapeRows = [];
   try {
-    const scrapeParams = new URLSearchParams({
-      select: META_SCRAPE_FIELDS,
-      brand_id: `in.(${ids})`,
-      order: "created_at.desc.nullslast",
-      limit: "2000",
-    });
+    const scrapeParams = buildMetaScrapeParams(ids);
     metaScrapeRows = await supabaseRest("meta_ad_scrapes", scrapeParams);
   } catch (error) {
     console.warn("No se pudo leer meta_ad_scrapes para enriquecer el resumen Meta Ads", error);

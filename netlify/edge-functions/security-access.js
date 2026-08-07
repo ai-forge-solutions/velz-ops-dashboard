@@ -1,6 +1,7 @@
 const COOKIE_NAME = "velz_dashboard_session";
 const LOGIN_PATH = "/auth/login";
 const LOGOUT_PATH = "/auth/logout";
+const RUNTIME_CONFIG_PATH = "/runtime-config.js";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 const encoder = new TextEncoder();
 
@@ -181,6 +182,25 @@ function loginRedirectFor(request) {
   return redirect(`${LOGIN_PATH}?next=${encodeURIComponent(returnTo)}`);
 }
 
+function runtimeConfigResponse() {
+  const publicConfig = {
+    VITE_SUPABASE_URL: Netlify.env.get("VITE_SUPABASE_URL") || "",
+    VITE_SUPABASE_ANON_KEY: Netlify.env.get("VITE_SUPABASE_ANON_KEY") || "",
+    VITE_CONDUCTOR_BASE_URL: Netlify.env.get("VITE_CONDUCTOR_BASE_URL") || "",
+    VITE_OUTREACH_API_BASE_URL: Netlify.env.get("VITE_OUTREACH_API_BASE_URL") || "",
+    VITE_OUTREACH_ORCHESTRATION_BASE_URL: Netlify.env.get("VITE_OUTREACH_ORCHESTRATION_BASE_URL") || "",
+    VITE_OUTREACH_GENERATE_SEQUENCE_PATH: Netlify.env.get("VITE_OUTREACH_GENERATE_SEQUENCE_PATH") || "",
+    VITE_OUTREACH_APPROVE_SEQUENCE_PATH: Netlify.env.get("VITE_OUTREACH_APPROVE_SEQUENCE_PATH") || "",
+    VITE_OUTREACH_REJECT_SEQUENCE_PATH: Netlify.env.get("VITE_OUTREACH_REJECT_SEQUENCE_PATH") || "",
+    VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH: Netlify.env.get("VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH") || "",
+    VITE_OUTREACH_LAUNCH_SALESHANDY_PATH: Netlify.env.get("VITE_OUTREACH_LAUNCH_SALESHANDY_PATH") || "",
+  };
+
+  return new Response(`window.__VELZ_RUNTIME_CONFIG__ = ${JSON.stringify(publicConfig)};\n`, {
+    headers: noStoreHeaders({ "Content-Type": "application/javascript; charset=UTF-8" }),
+  });
+}
+
 export default async (request, context) => {
   const expectedUsername = Netlify.env.get("VELZ_DASHBOARD_USERNAME");
   const expectedPassword = Netlify.env.get("VELZ_DASHBOARD_PASSWORD");
@@ -247,6 +267,8 @@ export default async (request, context) => {
   );
 
   if (!isAuthenticated) return loginRedirectFor(request);
+
+  if (url.pathname === RUNTIME_CONFIG_PATH) return runtimeConfigResponse();
 
   return context.next();
 };

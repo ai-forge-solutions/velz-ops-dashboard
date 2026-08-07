@@ -16,6 +16,7 @@ assert.deepEqual(OUTREACH_DEFAULT_ACTION_PATHS, {
   generate: "/outreach/leads/{lead_id}/sequences/generate",
   approve: "/outreach/sequences/{sequence_id}/approve",
   reject: "/outreach/sequences/{sequence_id}/reject",
+  editDraft: "/outreach/sequences/{sequence_id}/draft-fields",
   launch: "/outreach/sequences/{sequence_id}/launch-saleshandy",
 });
 assert.equal(
@@ -29,6 +30,10 @@ assert.equal(
 assert.equal(
   buildOutreachActionUrl("https://outreach.example.com", "reject", { sequenceId: "seq-1" }),
   "https://outreach.example.com/outreach/sequences/seq-1/reject",
+);
+assert.equal(
+  buildOutreachActionUrl("https://outreach.example.com", "editDraft", { sequenceId: "seq-1" }),
+  "https://outreach.example.com/outreach/sequences/seq-1/draft-fields",
 );
 assert.equal(
   buildOutreachActionUrl("https://outreach.example.com", "launch", { sequenceId: "seq-1" }),
