@@ -28,6 +28,12 @@ assert.deepEqual(createSequenceDraftForm(baseSequence), {
   ],
 });
 
+assert.deepEqual(createSequenceDraftForm(null), {
+  subject: "",
+  initial_email: "",
+  followups: [],
+});
+
 assert.equal(isSequenceDraftEditable({ sequence: baseSequence, configured: true, lifecycleKey: "not_launched" }).editable, true);
 assert.equal(isSequenceDraftEditable({ sequence: { ...baseSequence, review_status: "pending_review" }, configured: true, lifecycleKey: "not_launched" }).editable, true);
 assert.match(isSequenceDraftEditable({ sequence: null, configured: true }).reason, /sequence_id/);
