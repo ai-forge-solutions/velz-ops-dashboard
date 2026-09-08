@@ -71,6 +71,22 @@ export function normalizeErrorPayload(payload, fallback) {
   if (Array.isArray(payload)) return JSON.stringify(payload);
   if (typeof payload !== "object") return String(payload);
 
+  const blockers = payload.blockers || payload.hard_blockers || payload.reasons;
+  if (Array.isArray(blockers) && blockers.length) {
+    const code = payload.code || payload.error || payload.status;
+    const message = blockers.map((blocker) => normalizeErrorPayload(blocker, "")).filter(Boolean).join(" · ");
+    return code ? `${code}: ${message}` : message;
+  }
+
+  if (payload.checks && typeof payload.checks === "object") {
+    const failedChecks = Object.entries(payload.checks)
+      .filter(([, value]) => value === false || value === "false")
+      .map(([key, value]) => `${key}=${value}`);
+    if (payload.checks.sequence_exists === true || payload.checks.sequence_exists === "true") failedChecks.push("sequence_exists=true");
+    const status = payload.code || payload.error || payload.readiness_status || payload.next_action;
+    if (failedChecks.length) return status ? `${status}: ${failedChecks.join(" · ")}` : failedChecks.join(" · ");
+  }
+
   const directMessage = payload.message || payload.error || payload.blocker;
   if (directMessage) return normalizeErrorPayload(directMessage, fallback);
   if (payload.detail) {

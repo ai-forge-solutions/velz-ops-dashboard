@@ -419,7 +419,7 @@ function OutreachSection({ brand, onRefresh }) {
   });
   const events = Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const magnetEvents = Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
-  const canGenerate = Boolean(outreach?.readyToGenerate && actionConfigured.generate && !outreach?.blockers?.length);
+  const canGenerate = Boolean(outreach?.generateEligible && actionConfigured.generate && !busyAction);
   const canApprove = Boolean(outreach?.canApprove && actionConfigured.approve && sequenceId && !outreach?.blockers?.length);
   const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequenceId);
   const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length && !outreach?.launchBlockers?.length);
@@ -532,8 +532,9 @@ function OutreachSection({ brand, onRefresh }) {
               </button>
             </div>
             {!actionConfigured.generate && <EmptyState>Generate disabled: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/leads/{'{lead_id}'}/sequences/generate.</EmptyState>}
-            {actionConfigured.generate && !outreach.readyToGenerate && <EmptyState>Generate hidden by backend state: lead is not ready_to_generate.</EmptyState>}
-            {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Generate blocked by readiness/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
+            {actionConfigured.generate && !outreach.readyToGenerate && !outreach.generateBlockers?.length && <EmptyState tone={COLORS.amber}>Generate enabled with readiness warning: lead is not ready_to_generate; backend generator will make the final decision.</EmptyState>}
+            {outreach.warnings?.length > 0 && <EmptyState tone={COLORS.amber}>Generate readiness warnings (non-blocking): {outreach.warnings.join(" · ")}</EmptyState>}
+            {outreach.generateBlockers?.length > 0 && <EmptyState tone={COLORS.red}>Generate blocked by hard blockers: {outreach.generateBlockers.join(" · ")}</EmptyState>}
           </section>
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
