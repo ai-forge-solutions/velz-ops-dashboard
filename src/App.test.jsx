@@ -61,6 +61,48 @@ beforeEach(() => {
   mockGetMetaAdLibraryRun.mockResolvedValue({});
 });
 
+describe("Outreach generate availability", () => {
+  it("keeps Drafting available for legacy not_ready when generate endpoint is configured and only warnings remain", async () => {
+    globalThis.__VELZ_RUNTIME_CONFIG__ = { VITE_OUTREACH_API_BASE_URL: "https://outreach.example.com" };
+    const { outreachServiceAvailability } = await import("./App.jsx");
+
+    const availability = outreachServiceAvailability({
+      ...brand,
+      outreach: {
+        leadId: "dfa83244-018b-4912-8a5e-ef53ad8da8e8",
+        readyToGenerate: false,
+        generateEligible: true,
+        generateBlockers: [],
+        blockers: [],
+        warnings: ["legacy readiness not_ready"],
+      },
+    }, { type: "outreach", action: "generate" });
+
+    expect(availability.available).toBe(true);
+    expect(availability.message).toMatch(/Aviso readiness no bloqueante/);
+  });
+
+  it("blocks Drafting on hard generate blockers even when endpoint is configured", async () => {
+    globalThis.__VELZ_RUNTIME_CONFIG__ = { VITE_OUTREACH_API_BASE_URL: "https://outreach.example.com" };
+    const { outreachServiceAvailability } = await import("./App.jsx");
+
+    const availability = outreachServiceAvailability({
+      ...brand,
+      outreach: {
+        leadId: "dfa83244-018b-4912-8a5e-ef53ad8da8e8",
+        readyToGenerate: false,
+        generateEligible: false,
+        generateBlockers: ["missing recipient email"],
+        blockers: ["missing recipient email"],
+        warnings: ["legacy readiness not_ready"],
+      },
+    }, { type: "outreach", action: "generate" });
+
+    expect(availability.available).toBe(false);
+    expect(availability.message).toMatch(/condición dura: missing recipient email/);
+  });
+});
+
 describe("RunsView service popovers", () => {
   it("desktop service popover action triggers exactly one conductor request and shows immediate feedback", async () => {
     const user = userEvent.setup();

@@ -43,7 +43,8 @@ assert.equal(
 assert.throws(() => buildOutreachActionUrl("https://outreach.example.com", "launch", { leadId: qaLeadId }), /sequence_id/);
 assert.equal(normalizeErrorPayload({ detail: { blocker: "send_kill_switch_enabled" } }, "fallback"), "send_kill_switch_enabled");
 assert.equal(normalizeErrorPayload({ detail: { error: "runtime_configuration_missing", message: "SUPABASE_URL missing" } }, "fallback"), "SUPABASE_URL missing");
-assert.equal(normalizeErrorPayload({ detail: { blockers: ["a", "b"] } }, "fallback"), '{"blockers":["a","b"]}');
+assert.equal(normalizeErrorPayload({ detail: { code: "NO_ENVIABLE", blockers: ["missing recipient email", "active suppression"] } }, "fallback"), "NO_ENVIABLE: missing recipient email · active suppression");
+assert.equal(normalizeErrorPayload({ detail: { readiness_status: "not_ready", checks: { has_primary_email: true, sequence_exists: true, not_suppressed: true } } }, "fallback"), "not_ready: sequence_exists=true");
 
 const baseSequence = {
   id: "seq-1",
@@ -132,6 +133,51 @@ assert.equal(readyToGenerate.readiness.key, "ready_to_generate");
 assert.equal(readyToGenerate.readiness.label, "Ready to generate");
 assert.equal(readyToGenerate.nextAction.key, "generate");
 assert.equal(readyToGenerate.readyToGenerate, true);
+assert.equal(readyToGenerate.generateEligible, true);
+assert.deepEqual(readyToGenerate.generateBlockers, []);
+
+const legacyNotReadyCanGenerate = deriveOutreachStatus({
+  leadId: "dfa83244-018b-4912-8a5e-ef53ad8da8e8",
+  lead: {
+    primary_email: "silvia@example.com",
+    domain: "silvia-navarro.com",
+    outreach: {
+      ready_to_generate: false,
+      readiness_status: "not_ready",
+      blockers: ["legacy readiness not_ready"],
+    },
+  },
+  sequence: null,
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { generate: true },
+});
+assert.equal(legacyNotReadyCanGenerate.readiness.key, "not_ready");
+assert.equal(legacyNotReadyCanGenerate.readyToGenerate, false);
+assert.equal(legacyNotReadyCanGenerate.generateEligible, true);
+assert.equal(legacyNotReadyCanGenerate.nextAction.key, "generate");
+assert.deepEqual(legacyNotReadyCanGenerate.generateBlockers, []);
+assert.match(legacyNotReadyCanGenerate.warnings.join(" "), /legacy readiness not_ready/i);
+
+const notReadyMissingEmailCannotGenerate = deriveOutreachStatus({
+  leadId: "lead-missing-email",
+  lead: {
+    outreach: {
+      ready_to_generate: false,
+      readiness_status: "not_ready",
+    },
+  },
+  sequence: null,
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { generate: true },
+});
+assert.equal(notReadyMissingEmailCannotGenerate.generateEligible, false);
+assert.match(notReadyMissingEmailCannotGenerate.generateBlockers.join(" "), /missing recipient email/i);
 
 const launchReady = deriveOutreachStatus({
   leadId: qaLeadId,

@@ -99,18 +99,18 @@ function statusForService(brand, service) {
   return "not_run";
 }
 
-function outreachServiceAvailability(brand, service) {
+export function outreachServiceAvailability(brand, service) {
   const outreach = brand?.outreach;
   if (!outreach) return { available: false, message: "No hay lead/outreach asociado a esta marca." };
   if (brand.outreachLoadError) return { available: false, message: `No se pudieron leer las tablas Outreach: ${brand.outreachLoadError.message}` };
-  if (outreach.blockers?.length) return { available: false, message: `Bloqueado por readiness/backend: ${outreach.blockers.join(" · ")}` };
-
   if (service.action === "generate") {
     if (!outreachActionConfigured("generate")) return { available: false, message: "Drafting no configurado: falta VITE_OUTREACH_API_BASE_URL." };
     if (!outreach.leadId) return { available: false, message: "Drafting requiere lead_id." };
-    if (!outreach.readyToGenerate) return { available: false, message: "Drafting bloqueado: el lead no está ready_to_generate." };
-    return { available: true };
+    if (outreach.generateBlockers?.length) return { available: false, message: `Drafting bloqueado por condición dura: ${outreach.generateBlockers.join(" · ")}` };
+    return { available: true, message: outreach.warnings?.length ? `Aviso readiness no bloqueante: ${outreach.warnings.join(" · ")}` : null };
   }
+
+  if (outreach.blockers?.length) return { available: false, message: `Bloqueado por readiness/backend: ${outreach.blockers.join(" · ")}` };
 
   if (service.action === "launch") {
     const sequenceId = sequenceIdFor(outreach.sequence);
