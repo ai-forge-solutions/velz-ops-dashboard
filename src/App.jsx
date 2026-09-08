@@ -7,13 +7,17 @@ import { loadDashboardBrands } from "./supabaseData";
 import {
   conductorServiceAvailable,
   executeProcess,
+  generateOutreachSequence,
   getMetaAdLibraryRun,
   getProcessRun,
+  launchSaleshandyQaBulk,
+  outreachActionConfigured,
   previewProcess,
   runConductorPipeline,
   runConductorService,
   runProcess,
 } from "./conductorApi";
+import { sequenceIdFor } from "./sequenceDraftEditor";
 import BrandDrawer from "./BrandDrawer";
 import {
   buildProcessPayload,
@@ -32,22 +36,21 @@ import {
 import { deriveOutreachFilters } from "./outreachStatus";
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
-// in the velz-outreach Supabase project. Services marked deployed:false have
-// no orchestrator endpoint yet (per project notes) but are wired into the UI
-// so triggering them is a no-op until the real service exists.
+// in the velz-outreach Supabase project when type="conductor". Outreach actions
+// reuse the same backend calls exposed in the drawer so Drafting/Export can be
+// launched from the main dashboard tab too.
 // ---------------------------------------------------------------------------
 const META_ADS_SERVICE_KEY = "meta_ad_library_scraper";
 const META_ADS_POLL_INTERVAL_MS = 15_000;
 
 const SERVICES = [
-  { key: META_ADS_SERVICE_KEY, label: "Meta Ads", deployed: true },
-  { key: "brand_reviews", label: "Reviews", deployed: true },
-  { key: "web_stack_wappalyzer", label: "Tech Stack", deployed: true },
-  { key: "shopify_signals", label: "Shopify Signals", deployed: true },
-  { key: "similarweb", label: "SimilarWeb", deployed: false },
-  { key: "brand_context", label: "Contexto (Triage)", deployed: true },
-  { key: "drafting", label: "Drafting", deployed: false },
-  { key: "export", label: "Export", deployed: false },
+  { key: META_ADS_SERVICE_KEY, label: "Meta Ads", type: "conductor", deployed: true },
+  { key: "brand_reviews", label: "Reviews", type: "conductor", deployed: true },
+  { key: "web_stack_wappalyzer", label: "Tech Stack", type: "conductor", deployed: true },
+  { key: "shopify_signals", label: "Shopify Signals", type: "conductor", deployed: true },
+  { key: "brand_context", label: "Contexto (Triage)", type: "conductor", deployed: true },
+  { key: "drafting", label: "Drafting", type: "outreach", action: "generate", deployed: true },
+  { key: "export", label: "Export", type: "outreach", action: "launch", deployed: true },
 ];
 
 function serviceLabel(serviceKey) {
@@ -78,7 +81,55 @@ function fmtTime(iso) {
   return d.toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 function statusOf(brand, key) {
-  return brand.runs[key]?.status || "not_run";
+  return brand.runs?.[key]?.status || "not_run";
+}
+
+function statusForService(brand, service) {
+  const persisted = statusOf(brand, service.key);
+  if (persisted !== "not_run" || service.type !== "outreach") return persisted;
+
+  const outreach = brand.outreach;
+  if (service.action === "generate") return outreach?.sequence ? "success" : "not_run";
+  if (service.action === "launch") {
+    const lifecycle = outreach?.lifecycle?.key;
+    if (["submitted", "import_pending"].includes(lifecycle)) return "running";
+    if (["planned", "imported", "sent", "opened", "clicked", "replied"].includes(lifecycle)) return "success";
+    if (lifecycle === "failed") return "error";
+  }
+  return "not_run";
+}
+
+function outreachServiceAvailability(brand, service) {
+  const outreach = brand?.outreach;
+  if (!outreach) return { available: false, message: "No hay lead/outreach asociado a esta marca." };
+  if (brand.outreachLoadError) return { available: false, message: `No se pudieron leer las tablas Outreach: ${brand.outreachLoadError.message}` };
+  if (outreach.blockers?.length) return { available: false, message: `Bloqueado por readiness/backend: ${outreach.blockers.join(" · ")}` };
+
+  if (service.action === "generate") {
+    if (!outreachActionConfigured("generate")) return { available: false, message: "Drafting no configurado: falta VITE_OUTREACH_API_BASE_URL." };
+    if (!outreach.leadId) return { available: false, message: "Drafting requiere lead_id." };
+    if (!outreach.readyToGenerate) return { available: false, message: "Drafting bloqueado: el lead no está ready_to_generate." };
+    return { available: true };
+  }
+
+  if (service.action === "launch") {
+    const sequenceId = sequenceIdFor(outreach.sequence);
+    if (!outreachActionConfigured("launch")) return { available: false, message: "Export no configurado: falta VITE_OUTREACH_API_BASE_URL." };
+    if (!sequenceId) return { available: false, message: "Export requiere sequence_id." };
+    if (!outreach.launchEligible) return { available: false, message: "Export bloqueado: el read model todavía no marca launch-ready." };
+    if (outreach.launchBlockers?.length) return { available: false, message: `Export bloqueado: ${outreach.launchBlockers.join(" · ")}` };
+    return { available: true };
+  }
+
+  return { available: false, message: "Acción Outreach no soportada." };
+}
+
+function serviceAvailability(brand, service) {
+  if (service.type === "outreach") return outreachServiceAvailability(brand, service);
+  if (!service.deployed || !conductorServiceAvailable(service.key)) {
+    return { available: false, message: "Este servicio aún no tiene endpoint desplegado en el orquestador." };
+  }
+  return { available: true };
 }
 
 // -- Status cell: a small horizon-line + point, echoing the Velz mark -------
@@ -319,19 +370,39 @@ export default function App() {
 
   // -- Real conductor calls --------------------------------------------------
   async function triggerService(brandId, serviceKey) {
-    if (!conductorServiceAvailable(serviceKey)) {
-      const text = "Este servicio aún no tiene endpoint desplegado en el orquestador.";
+    const service = SERVICES.find((item) => item.key === serviceKey);
+    const brand = brands.find((item) => item.id === brandId);
+    const availability = serviceAvailability(brand, service || { key: serviceKey, type: "conductor" });
+    if (!availability.available) {
+      const text = availability.message;
       updateRun(brandId, serviceKey, { status: "skipped", message: text });
       setActionMessage({ tone: "warning", text });
       return;
     }
 
     markServiceRunning(brandId, serviceKey);
-    const brandName = brands.find((brand) => brand.id === brandId)?.name || brandId;
+    const brandName = brand?.name || brandId;
     setActionMessage({ tone: "success", text: `Lanzando ${serviceLabel(serviceKey)} para ${brandName}…` });
     try {
-      const result = await runConductorService(brandId, serviceKey);
-      markServiceFinished(brandId, serviceKey, result, "El orquestador terminó sin mensaje.");
+      if (service?.type === "outreach" && service.action === "generate") {
+        const result = await generateOutreachSequence(brand.outreach.leadId);
+        updateRun(brandId, serviceKey, {
+          status: "success",
+          message: result?.message || "Drafting completado por el backend de Outreach.",
+          response_payload: result,
+        });
+      } else if (service?.type === "outreach" && service.action === "launch") {
+        const sequenceId = sequenceIdFor(brand.outreach.sequence);
+        const result = await launchSaleshandyQaBulk(sequenceId, brand.outreach.leadId);
+        updateRun(brandId, serviceKey, {
+          status: "success",
+          message: result?.message || "Export lanzado por el backend de Outreach.",
+          response_payload: result,
+        });
+      } else {
+        const result = await runConductorService(brandId, serviceKey);
+        markServiceFinished(brandId, serviceKey, result, "El orquestador terminó sin mensaje.");
+      }
     } catch (error) {
       updateRun(brandId, serviceKey, {
         status: "error",
@@ -567,7 +638,7 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
                 {SERVICES.map(s => (
                   <td key={s.key} className="px-2 py-1.5 relative">
                     <button className="w-full" onClick={() => setPopover(p => p?.brandId === b.id && p?.serviceKey === s.key ? null : { brandId: b.id, serviceKey: s.key })}>
-                      <StatusDot status={statusOf(b, s.key)} />
+                      <StatusDot status={statusForService(b, s)} />
                     </button>
                     {popover?.brandId === b.id && popover?.serviceKey === s.key && (
                       <div ref={popRef}>
@@ -656,7 +727,7 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
 
       <div className="grid grid-cols-2 gap-2">
         {SERVICES.map((service) => {
-          const status = statusOf(brand, service.key);
+          const status = statusForService(brand, service);
           return (
             <div key={service.key} className="relative">
               <button
@@ -736,8 +807,9 @@ function BulkTrigger({ onTrigger }) {
 }
 
 function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
-  const run = brand.runs[service.key];
-  const status = run?.status || "not_run";
+  const run = brand.runs?.[service.key];
+  const status = statusForService(brand, service);
+  const availability = serviceAvailability(brand, service);
   return (
     <div data-cell-popover className="z-30 w-full min-w-56 rounded-md p-3 text-left sm:absolute sm:left-1/2 sm:top-8 sm:w-56 sm:-translate-x-1/2"
       style={{ background: "#fff", border: `1px solid ${COLORS.line}`, boxShadow: "0 8px 24px rgba(0,0,0,0.08)" }}>
@@ -766,16 +838,16 @@ function CellPopoverImpl({ brand, service, onTrigger, onClose }) {
           {run.message}
         </div>
       )}
-      {!service.deployed && (
+      {!availability.available && (
         <div className="text-[10px] mb-2 flex items-start gap-1" style={{ color: COLORS.amber }}>
-          <AlertTriangle size={11} className="mt-0.5 shrink-0" /> Este servicio aún no está desplegado en el orquestador.
+          <AlertTriangle size={11} className="mt-0.5 shrink-0" /> {availability.message}
         </div>
       )}
       <button onClick={onTrigger}
-        disabled={!service.deployed}
+        disabled={!availability.available}
         className="w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-45"
-        style={{ background: service.deployed ? COLORS.ink : COLORS.line, color: service.deployed ? "#fff" : COLORS.muted }}>
-        <RotateCcw size={11} /> {service.deployed ? "Ejecutar ahora" : "No disponible"}
+        style={{ background: availability.available ? COLORS.ink : COLORS.line, color: availability.available ? "#fff" : COLORS.muted }}>
+        <RotateCcw size={11} /> {availability.available ? "Ejecutar ahora" : "No disponible"}
       </button>
     </div>
   );

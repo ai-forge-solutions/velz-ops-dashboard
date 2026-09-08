@@ -4,6 +4,7 @@ import {
   defaultProcessSteps,
   findProcessRunItem,
   isProcessRunTerminal,
+  PROCESS_STEP_OPTIONS,
   processRunBrands,
   processRunStatusSummary,
   processRunSteps,
@@ -27,6 +28,9 @@ assert.deepEqual(
 );
 
 const defaults = defaultProcessSteps();
+assert.equal(PROCESS_STEP_OPTIONS.some((step) => step.id === "similarweb"), false);
+assert.equal(PROCESS_STEP_OPTIONS.find((step) => step.id === "email_generation").label, "Drafting");
+assert.equal(PROCESS_STEP_OPTIONS.find((step) => step.id === "email_send").label, "Export");
 assert.equal(defaults.find((step) => step.id === "brand_context").mode, "preserve_success");
 assert.equal(defaults.find((step) => step.id === "shopify_signals").enabled, true);
 assert.equal(defaults.find((step) => step.id === "shopify_signals").mode, "preserve_success");
