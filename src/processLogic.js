@@ -2,10 +2,9 @@ export const PROCESS_STEP_OPTIONS = [
   { id: "brand_context", label: "Contexto de marca", defaultMode: "preserve_success", group: "ETL" },
   { id: "meta_ads", label: "Meta Ads", defaultMode: "preserve_success", group: "ETL" },
   { id: "shopify_signals", label: "Shopify Signals", defaultMode: "preserve_success", group: "ETL" },
-  { id: "similarweb", label: "SimilarWeb", defaultMode: "preserve_success", group: "ETL" },
   { id: "reviews", label: "Reviews", defaultMode: "preserve_success", group: "ETL" },
-  { id: "email_generation", label: "Generar email", defaultMode: "overwrite", group: "Outreach" },
-  { id: "email_send", label: "Enviar email", defaultMode: "overwrite", group: "Outreach", explicit: true },
+  { id: "email_generation", label: "Drafting", defaultMode: "overwrite", group: "Outreach" },
+  { id: "email_send", label: "Export", defaultMode: "overwrite", group: "Outreach", explicit: true },
 ];
 
 const VALID_STEP_IDS = new Set(PROCESS_STEP_OPTIONS.map((step) => step.id));
