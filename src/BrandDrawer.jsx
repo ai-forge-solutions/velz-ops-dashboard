@@ -15,12 +15,15 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { loadBrandSource } from "./supabaseData";
+import { loadBrandSource, loadLeadMagnetTools, setLeadMagnetToolKey } from "./supabaseData";
+import { assignmentDisplay, groupToolsBySegment, isToolSelectionDirty, toolOptionLabel } from "./leadToolCatalog";
 import {
   approveOutreachSequence,
   editOutreachSequenceDraft,
   generateOutreachSequence,
   launchSaleshandyQaBulk,
+  outreachRuntimeDiagnostics,
+  probeOutreachRuntime,
   rejectOutreachSequence,
   saleshandyQaLaunchConfigured,
 } from "./conductorApi";
@@ -244,12 +247,162 @@ function LaunchResult({ result }) {
   );
 }
 
+function OutreachDiagnostics({ diagnostics, probe, busy, onProbe }) {
+  if (!diagnostics) return null;
+  const keys = diagnostics.runtimeConfigKeys?.join(", ") || "—";
+  return (
+    <section className="rounded-md p-3" style={{ border: `1px dashed ${COLORS.amber}`, background: `${COLORS.amber}0D` }}>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h4 className="font-medium">Outreach config diagnostics</h4>
+        <button type="button" onClick={onProbe} disabled={busy} className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}` }}>
+          {busy && <Loader2 size={12} className="animate-spin" />} Test Outreach API
+        </button>
+      </div>
+      <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <KeyValue label="configured" value={diagnostics.configured ? "true" : "false"} />
+        <KeyValue label="base URL source" value={diagnostics.baseUrlSource} />
+        <KeyValue label="base URL" value={diagnostics.baseUrl || "—"} />
+        <KeyValue label="editDraft path" value={diagnostics.editDraftPath || "—"} />
+        <KeyValue label="editDraft configured" value={diagnostics.editDraftConfigured ? "true" : "false"} />
+        <KeyValue label="runtime config present" value={diagnostics.runtimeConfigPresent ? "true" : "false"} />
+        <KeyValue label="Vite has Outreach base" value={diagnostics.viteHasOutreachBase ? "true" : "false"} />
+        <KeyValue label="runtime VITE keys" value={keys} />
+      </dl>
+      {probe && (
+        <div className="mt-3 rounded p-2 mono text-[10px]" style={{ background: COLORS.paper, border: `1px solid ${probe.ok ? COLORS.green : COLORS.red}33`, color: probe.ok ? COLORS.green : COLORS.red }}>
+          {JSON.stringify(probe, null, 2)}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LeadMagnetToolSelector({ outreach, onRefresh }) {
+  const [tools, setTools] = useState([]);
+  const [toolsError, setToolsError] = useState(null);
+  const [loadingTools, setLoadingTools] = useState(true);
+  const [selectedToolKey, setSelectedToolKey] = useState(outreach?.lead?.toolAssignment?.assigned_tool_key || outreach?.lead?.tool_key || "");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const [saveMessage, setSaveMessage] = useState(null);
+
+  const catalogByKey = useMemo(() => new Map(tools.map((tool) => [tool.tool_key, tool])), [tools]);
+  const assignment = assignmentDisplay(outreach?.lead?.toolAssignment, catalogByKey);
+  const groupedTools = groupToolsBySegment(tools);
+  const dirty = isToolSelectionDirty(assignment.selectedToolKey, selectedToolKey);
+
+  useEffect(() => {
+    setSelectedToolKey(outreach?.lead?.toolAssignment?.assigned_tool_key || outreach?.lead?.tool_key || "");
+    setSaveError(null);
+    setSaveMessage(null);
+  }, [outreach?.leadId, outreach?.lead?.toolAssignment?.assigned_tool_key, outreach?.lead?.tool_key]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTools() {
+      setLoadingTools(true);
+      setToolsError(null);
+      try {
+        const rows = await loadLeadMagnetTools();
+        if (!cancelled) setTools(rows || []);
+      } catch (error) {
+        if (!cancelled) setToolsError(error);
+      } finally {
+        if (!cancelled) setLoadingTools(false);
+      }
+    }
+    loadTools();
+    return () => { cancelled = true; };
+  }, []);
+
+  async function saveToolKey() {
+    setSaving(true);
+    setSaveError(null);
+    setSaveMessage(null);
+    try {
+      await setLeadMagnetToolKey(outreach.leadId, selectedToolKey || null);
+      setSaveMessage(selectedToolKey ? "Tool asignada en leads.tool_key." : "Tool canónica limpiada; suggested_tool queda como texto fuente.");
+      await onRefresh?.();
+    } catch (error) {
+      setSaveError(error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h4 className="font-medium">Lead magnet / tool canónica</h4>
+          <p className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>
+            Selecciona desde el catálogo DB. Guardar escribe en <span className="mono">leads.tool_key</span>; <span className="mono">suggested_tool</span> queda como texto legacy/source.
+          </p>
+        </div>
+        <OutreachPill tone={assignment.assignmentSource === "unmapped_free_text" ? COLORS.amber : assignment.resolvedToolKey ? COLORS.green : COLORS.muted}>
+          {assignment.assignmentSource}
+        </OutreachPill>
+      </div>
+
+      {toolsError && <EmptyState tone={COLORS.amber}>No se pudo cargar lead_magnet_tools: {toolsError.message}</EmptyState>}
+      {!toolsError && (
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <label className="grid gap-1 text-[11px]">
+            <span className="font-medium">Dropdown de catálogo</span>
+            <select
+              value={selectedToolKey}
+              onChange={(event) => setSelectedToolKey(event.target.value)}
+              disabled={loadingTools || saving}
+              className="min-h-11 rounded px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ border: `1px solid ${COLORS.line}`, background: COLORS.paper }}
+            >
+              <option value="">Sin tool canónica asignada</option>
+              {Object.entries(groupedTools).map(([segment, segmentTools]) => (
+                <optgroup key={segment} label={segment}>
+                  {segmentTools.map((tool) => (
+                    <option key={tool.tool_key} value={tool.tool_key}>{toolOptionLabel(tool)}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={saveToolKey}
+            disabled={!dirty || saving || loadingTools}
+            className="self-end rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45"
+            style={{ background: dirty ? COLORS.ink : COLORS.line, color: dirty ? "#fff" : COLORS.muted }}
+          >
+            {saving ? "Guardando…" : "Guardar tool_key"}
+          </button>
+        </div>
+      )}
+
+      <dl className="mt-3 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+        <KeyValue label="leads.tool_key actual" value={assignment.selectedToolKey || "—"} />
+        <KeyValue label="resolved por vista" value={assignment.resolvedToolKey || "—"} />
+        <KeyValue label="nombre resuelto" value={assignment.resolvedToolName || "—"} />
+        <KeyValue label="suggested_tool legacy" value={assignment.suggestedTool || "—"} />
+      </dl>
+      {saveError && <div className="mt-3"><EmptyState tone={COLORS.red}>No se pudo guardar leads.tool_key: {saveError.message}</EmptyState></div>}
+      {saveMessage && <div className="mt-3"><EmptyState tone={COLORS.green}>{saveMessage}</EmptyState></div>}
+      {!assignment.selectedToolKey && assignment.resolvedToolKey && (
+        <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>
+          Sugerencia detectada por alias: <span className="mono">{assignment.resolvedToolKey}</span>. Pulsa Guardar para convertirla en asignación canónica explícita.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function OutreachSection({ brand, onRefresh }) {
   const outreach = brand.outreach;
   const [confirming, setConfirming] = useState(false);
   const [busyAction, setBusyAction] = useState(null);
   const [actionResult, setActionResult] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const [diagnostics, setDiagnostics] = useState(() => outreachRuntimeDiagnostics());
+  const [probeResult, setProbeResult] = useState(null);
+  const [probeBusy, setProbeBusy] = useState(false);
   const [rejectNote, setRejectNote] = useState("");
   const configured = saleshandyQaLaunchConfigured();
   const tone = outreachTone(outreach);
@@ -266,18 +419,38 @@ function OutreachSection({ brand, onRefresh }) {
   });
   const events = Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const magnetEvents = Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
-  const canGenerate = Boolean(outreach?.readyToGenerate && actionConfigured.generate && !outreach?.blockers?.length);
+  const canGenerate = Boolean(outreach?.generateEligible && actionConfigured.generate && !busyAction);
   const canApprove = Boolean(outreach?.canApprove && actionConfigured.approve && sequenceId && !outreach?.blockers?.length);
   const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequenceId);
-  const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length);
+  const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length && !outreach?.launchBlockers?.length);
   const displayedSequence = sequenceEditor.result?.sequence || sequence;
   const displayedReviewStatus = displayedSequence?.review_status || outreach?.readiness?.label;
-  const editConfigured = Boolean(actionConfigured.editDraft);
-  const sequenceEditable = isSequenceDraftEditable({ sequence, configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
+  // Do not use outreach.actionConfigured.editDraft here: it is captured when
+  // Supabase rows load and can be stale if runtime-config arrives afterwards.
+  // The diagnostics proved the browser resolves the Outreach URL correctly, so
+  // edit gating must read the live runtime config directly on each render.
+  const liveDiagnostics = outreachRuntimeDiagnostics();
+  const editConfigured = Boolean(liveDiagnostics.editDraftConfigured);
+  const sequenceEditable = isSequenceDraftEditable({ sequence: displayedSequence, configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
 
   useEffect(() => {
     dispatchSequenceEditor({ type: "cancel", sequence });
   }, [sequenceId]);
+
+  useEffect(() => {
+    setDiagnostics(liveDiagnostics);
+  }, [liveDiagnostics.configured, liveDiagnostics.baseUrl, liveDiagnostics.editDraftConfigured, sequenceEditable.reason]);
+
+  async function runOutreachProbe() {
+    setProbeBusy(true);
+    try {
+      const result = await probeOutreachRuntime();
+      setDiagnostics(result.diagnostics || outreachRuntimeDiagnostics());
+      setProbeResult(result);
+    } finally {
+      setProbeBusy(false);
+    }
+  }
 
   async function saveSequenceDraft() {
     dispatchSequenceEditor({ type: "saving" });
@@ -334,17 +507,22 @@ function OutreachSection({ brand, onRefresh }) {
           <JourneyIndicator steps={outreach.journey} />
           {outreach.suppression && <EmptyState tone={COLORS.red}>Suppression activa: {outreach.suppression.reason || outreach.suppression.type || "sin motivo"}. No enviar.</EmptyState>}
           {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
+          {outreach.warnings?.length > 0 && <EmptyState tone={COLORS.amber}>Avisos no bloqueantes: {outreach.warnings.join(" · ")}</EmptyState>}
           <EmptyState tone={outreach.blockers?.length ? COLORS.amber : COLORS.green}>Siguiente acción: {outreach.nextAction?.label}</EmptyState>
 
           <KeyValueList title="Readiness checks" values={[
             ["recipient", outreach.email],
             ["lead_id", outreach.leadId],
             ["sequence_id", sequenceId],
-            ["tool_key", sequence?.tool_key || outreach.lead?.tool_key],
+            ["tool_key", outreach.lead?.toolAssignment?.assigned_tool_key || sequence?.tool_key || outreach.lead?.tool_key],
+            ["resolved tool", outreach.lead?.toolAssignment?.resolved_tool_key],
             ["public tool URL", outreach.toolUrl, outreach.toolUrl],
             ["ready_to_generate", outreach.readyToGenerate ? "true" : "false"],
             ["blockers", outreach.blockers?.join(" · ") || "—"],
+            ["warnings", outreach.warnings?.join(" · ") || "—"],
           ]} />
+
+          <LeadMagnetToolSelector outreach={outreach} onRefresh={onRefresh} />
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -354,8 +532,9 @@ function OutreachSection({ brand, onRefresh }) {
               </button>
             </div>
             {!actionConfigured.generate && <EmptyState>Generate disabled: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/leads/{'{lead_id}'}/sequences/generate.</EmptyState>}
-            {actionConfigured.generate && !outreach.readyToGenerate && <EmptyState>Generate hidden by backend state: lead is not ready_to_generate.</EmptyState>}
-            {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Generate blocked by readiness/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
+            {actionConfigured.generate && !outreach.readyToGenerate && !outreach.generateBlockers?.length && <EmptyState tone={COLORS.amber}>Generate enabled with readiness warning: lead is not ready_to_generate; backend generator will make the final decision.</EmptyState>}
+            {outreach.warnings?.length > 0 && <EmptyState tone={COLORS.amber}>Generate readiness warnings (non-blocking): {outreach.warnings.join(" · ")}</EmptyState>}
+            {outreach.generateBlockers?.length > 0 && <EmptyState tone={COLORS.red}>Generate blocked by hard blockers: {outreach.generateBlockers.join(" · ")}</EmptyState>}
           </section>
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
@@ -364,6 +543,7 @@ function OutreachSection({ brand, onRefresh }) {
               <OutreachPill tone={tone}>{displayedReviewStatus}</OutreachPill>
             </div>
             <SequencePreview sequence={displayedSequence} editor={sequenceEditor} dispatchEditor={dispatchSequenceEditor} editableState={sequenceEditable} onSave={saveSequenceDraft} />
+            {!sequenceEditable.editable && <div className="mt-3"><OutreachDiagnostics diagnostics={diagnostics} probe={probeResult} busy={probeBusy} onProbe={runOutreachProbe} /></div>}
             <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
               <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
               <button onClick={() => runAction("reject", () => rejectOutreachSequence(sequenceId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
@@ -397,6 +577,7 @@ function OutreachSection({ brand, onRefresh }) {
             {!configured && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/sequences/{'{sequence_id}'}/launch-saleshandy. VITE_OUTREACH_ORCHESTRATION_BASE_URL queda solo como alias legacy.</p>}
             {configured && !sequenceId && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: el read model aún no expone sequence_id; approve/reject/launch no usan lead_id como fallback.</p>}
             {configured && !outreach.launchEligible && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada por el read model: launch solo aparece cuando backend marca launch-ready y no hay estado final/bloqueado.</p>}
+            {configured && outreach.launchBlockers?.length > 0 && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Launch bloqueado hasta resolver: {outreach.launchBlockers.join(" · ")}. Aprobar la copy sigue permitido y no envía nada.</p>}
           </div>
 
           <KeyValueList title="Engagement / tool activity" values={[
@@ -417,6 +598,8 @@ function OutreachSection({ brand, onRefresh }) {
           <div className="max-w-lg rounded-lg p-5 shadow-2xl" style={{ background: COLORS.paper, border: `1px solid ${COLORS.line}` }}>
             <h3 className="mb-2 text-base font-medium">Confirmar launch Saleshandy real</h3>
             <p className="mb-3 text-xs leading-5" style={{ color: COLORS.muted }}>Esto llama al backend de Outreach y puede crear/importar un prospect real en Saleshandy. No es una llamada browser → Saleshandy; conserva guardrails backend, QA/non-QA y idempotencia.</p>
+            {busyAction === "launch" && <EmptyState>Launching… esperando respuesta del backend.</EmptyState>}
+            {actionError && <EmptyState tone={COLORS.red}>Launch failed: {actionError.message}</EmptyState>}
             <dl className="mb-4 grid gap-2 text-xs">
               <KeyValue label="recipient" value={outreach?.email} />
               <KeyValue label="lead_id" value={outreach?.leadId} />

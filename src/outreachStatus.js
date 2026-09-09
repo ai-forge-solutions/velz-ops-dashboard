@@ -77,6 +77,57 @@ function pickFirst(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "") ?? null;
 }
 
+function normalizedMessage(value) {
+  return normalize(value).replace(/[_-]/g, " ");
+}
+
+function isMissingToolUrl(value) {
+  return normalizedMessage(value).includes("missing tool url");
+}
+
+function isGenerateHardBlocker(value) {
+  const message = normalizedMessage(value);
+  return [
+    "active suppression",
+    "suppression",
+    "suppress",
+    "do not contact",
+    "dnc",
+    "missing email",
+    "email missing",
+    "missing recipient email",
+    "recipient email missing",
+    "no recipient email",
+    "sequence exists",
+    "existing sequence",
+    "sequence already exists",
+    "already has sequence",
+    "existing email sequence",
+  ].some((needle) => message.includes(needle));
+}
+
+function isReadinessWarning(value) {
+  const message = normalizedMessage(value);
+  return isMissingToolUrl(message) || [
+    "not ready",
+    "not ready to generate",
+    "ready to generate false",
+    "ready to generate=false",
+    "ready to generate",
+    "readiness",
+    "missing tool assignment",
+    "missing tool",
+    "tool assignment",
+    "source backed angle",
+    "source backed",
+    "legacy",
+  ].some((needle) => message.includes(needle));
+}
+
+function pushUnique(list, value) {
+  if (value && !list.includes(value)) list.push(value);
+}
+
 export function publicToolUrl(sequence, lead) {
   const metadata = pickMetadata(sequence);
   return (
@@ -171,10 +222,10 @@ function actionFlags({ lead, sequence, send, readModel, launchEligible }) {
   };
 }
 
-function nextActionFrom({ readinessKey, lifecycleKey, blockers, sequence, flags, configured }) {
+function nextActionFrom({ readinessKey, lifecycleKey, blockers, sequence, flags, configured, generateEligible = false }) {
   if (lifecycleKey === "suppressed") return { key: "suppressed", label: "Suppressed — do not send" };
   if (blockers.length > 0) return { key: "blocked", label: `Investigate blocker: ${blockers[0]}` };
-  if (flags.readyToGenerate || readinessKey === "ready_to_generate") return { key: "generate", label: configured.generate ? "Generate sequence" : "Generate endpoint not configured" };
+  if (generateEligible || flags.readyToGenerate || readinessKey === "ready_to_generate") return { key: "generate", label: configured.generate ? "Generate sequence" : "Generate endpoint not configured" };
   if (readinessKey === "pending_review") return { key: "review", label: "Review sequence before launch" };
   if (["not_ready", "no_sequence"].includes(readinessKey)) return { key: "not_ready", label: "Resolve readiness blockers before generation" };
   if (lifecycleKey === "failed") return { key: "investigate_failure", label: "Investigate provider/send failure" };
@@ -185,9 +236,9 @@ function nextActionFrom({ readinessKey, lifecycleKey, blockers, sequence, flags,
   return { key: "blocked", label: "Missing outreach source data" };
 }
 
-function buildJourney({ readinessKey, lifecycleKey, flags, sequence }) {
+function buildJourney({ readinessKey, lifecycleKey, flags, sequence, generateEligible = false }) {
   const readinessStatus = ["blocked", "not_ready", "no_sequence"].includes(readinessKey) ? "blocked" : "done";
-  const sequenceStatus = flags.readyToGenerate || readinessKey === "ready_to_generate" ? "current" : sequence ? "done" : "pending";
+  const sequenceStatus = generateEligible || flags.readyToGenerate || readinessKey === "ready_to_generate" ? "current" : sequence ? "done" : "pending";
   const reviewStatus = readinessKey === "pending_review" ? "current" : ["approved", "launch_ready"].includes(readinessKey) ? "done" : sequence ? "pending" : "pending";
   const saleshandyStatus = ["planned", "submitted", "import_pending"].includes(lifecycleKey) ? "current" : ["imported", "sent", "opened", "clicked", "replied"].includes(lifecycleKey) ? "done" : flags.launchReady ? "current" : "pending";
   const engagementStatus = ["sent", "opened", "clicked", "replied"].includes(lifecycleKey) ? "current" : "pending";
@@ -200,8 +251,23 @@ function buildJourney({ readinessKey, lifecycleKey, flags, sequence }) {
   ];
 }
 
+function generateBlockersFrom({ email, sequence, blockers = [], lifecycleKey }) {
+  const generateBlockers = [];
+  if (!email) pushUnique(generateBlockers, "missing recipient email");
+  if (sequence) pushUnique(generateBlockers, "existing sequence");
+  if (["suppressed", "submitted", "import_pending", "imported", "sent", "opened", "clicked", "replied"].includes(lifecycleKey)) {
+    pushUnique(generateBlockers, `existing lifecycle ${lifecycleKey}`);
+  }
+  for (const blocker of blockers) {
+    if (isGenerateHardBlocker(blocker)) pushUnique(generateBlockers, blocker);
+  }
+  return generateBlockers;
+}
+
 export function deriveOutreachStatus({ leadId, lead, sequence, send, events = [], magnetEvents = [], suppression, launchConfigured = false, actionConfigured = {} } = {}) {
   const blockers = [];
+  const warnings = [];
+  const launchBlockers = [];
   const readModel = lead?.outreach || lead?.outreach_status || lead?.outreach_read_model || sequence?.read_model || {};
   const email = recipientEmail(sequence, lead);
   const toolUrl = publicToolUrl(sequence, lead);
@@ -210,9 +276,16 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
 
   const backendBlockers = readModel?.blockers || lead?.outreach_blockers || sequence?.blockers || sequence?.readiness_blockers;
   if (Array.isArray(backendBlockers)) {
-    for (const blocker of backendBlockers) blockers.push(typeof blocker === "string" ? blocker : blocker?.message || blocker?.reason || JSON.stringify(blocker));
+    for (const blocker of backendBlockers) {
+      const message = typeof blocker === "string" ? blocker : blocker?.message || blocker?.reason || JSON.stringify(blocker);
+      if (isReadinessWarning(message) && !isGenerateHardBlocker(message)) pushUnique(warnings, message);
+      else pushUnique(blockers, message);
+    }
   }
-  if (sequence && !toolUrl) blockers.push("missing tool URL");
+  if (!email) pushUnique(blockers, "missing recipient email");
+  if (sequence && !toolUrl) {
+    pushUnique(warnings, "missing tool URL — ok for copy review and current no-link launch strategy");
+  }
   const sendStatus = normalize(send?.status || send?.send_status);
   const providerImportStatus = normalize(send?.provider_import_status || send?.import_status);
   if ([sendStatus, providerImportStatus].some((value) => ["failed", "error", "bounced", "rejected"].includes(value))) blockers.push("provider/send failure");
@@ -222,13 +295,16 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
   const readinessKey = readinessFrom({ lead, sequence, suppression: activeSuppression, blockers, readModel });
   const lifecycleKey = lifecycleFrom({ sequence, send, eventsSummary, suppression: activeSuppression, readModel });
   const qaEligible = leadId === QA_LEAD_ID && email === QA_RECIPIENT && !activeSuppression && Boolean(sequence) && Boolean(toolUrl);
-  const flags = actionFlags({ lead, sequence, send, readModel, launchEligible: qaEligible && ["approved", "launch_ready"].includes(readinessKey) });
+  const approvedCopyReady = Boolean(sequence) && !activeSuppression && ["approved", "launch_ready"].includes(readinessKey);
+  const flags = actionFlags({ lead, sequence, send, readModel, launchEligible: approvedCopyReady || (qaEligible && ["approved", "launch_ready"].includes(readinessKey)) });
   const configured = {
     generate: Boolean(actionConfigured.generate),
     approve: Boolean(actionConfigured.approve),
     reject: Boolean(actionConfigured.reject),
     launch: Boolean(actionConfigured.launch ?? launchConfigured),
   };
+  const generateBlockers = generateBlockersFrom({ email, sequence, blockers, lifecycleKey });
+  const generateEligible = Boolean(configured.generate && leadId && generateBlockers.length === 0);
 
   return {
     leadId,
@@ -250,13 +326,17 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
     magnetEvents: magnetSummary,
     suppression: activeSuppression,
     blockers,
+    warnings,
+    launchBlockers,
     readyToGenerate: flags.readyToGenerate || readinessKey === "ready_to_generate",
+    generateEligible,
+    generateBlockers,
     canApprove: flags.canApprove || readinessKey === "pending_review",
     canReject: flags.canReject || readinessKey === "pending_review",
     launchEligible: flags.launchReady && !["submitted", "import_pending", "imported", "sent", "opened", "clicked", "replied", "failed", "suppressed"].includes(lifecycleKey),
     actionConfigured: configured,
-    journey: buildJourney({ readinessKey, lifecycleKey, flags, sequence }),
-    nextAction: nextActionFrom({ readinessKey, lifecycleKey, blockers, sequence, flags, configured }),
+    journey: buildJourney({ readinessKey, lifecycleKey, flags, sequence, generateEligible }),
+    nextAction: nextActionFrom({ readinessKey, lifecycleKey, blockers, sequence, flags, configured, generateEligible }),
   };
 }
 

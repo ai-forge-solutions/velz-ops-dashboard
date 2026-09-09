@@ -16,10 +16,11 @@ export function sequenceIdFor(sequence) {
 }
 
 export function createSequenceDraftForm(sequence = {}) {
-  const followups = Array.isArray(sequence.followups) ? sequence.followups : [];
+  const draft = sequence || {};
+  const followups = Array.isArray(draft.followups) ? draft.followups : [];
   return {
-    subject: sequence.subject || "",
-    initial_email: sequence.initial_email || sequence.body || "",
+    subject: draft.subject || "",
+    initial_email: draft.initial_email || draft.body || "",
     followups: followups.map(normalizedFollowup),
   };
 }

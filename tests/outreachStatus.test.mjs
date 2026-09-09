@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   OUTREACH_DEFAULT_ACTION_PATHS,
   buildOutreachActionUrl,
+  normalizeErrorPayload,
 } from "../src/conductorApi.js";
 import {
   deriveOutreachFilters,
@@ -40,6 +41,10 @@ assert.equal(
   "https://outreach.example.com/outreach/sequences/seq-1/launch-saleshandy",
 );
 assert.throws(() => buildOutreachActionUrl("https://outreach.example.com", "launch", { leadId: qaLeadId }), /sequence_id/);
+assert.equal(normalizeErrorPayload({ detail: { blocker: "send_kill_switch_enabled" } }, "fallback"), "send_kill_switch_enabled");
+assert.equal(normalizeErrorPayload({ detail: { error: "runtime_configuration_missing", message: "SUPABASE_URL missing" } }, "fallback"), "SUPABASE_URL missing");
+assert.equal(normalizeErrorPayload({ detail: { code: "NO_ENVIABLE", blockers: ["missing recipient email", "active suppression"] } }, "fallback"), "NO_ENVIABLE: missing recipient email · active suppression");
+assert.equal(normalizeErrorPayload({ detail: { readiness_status: "not_ready", checks: { has_primary_email: true, sequence_exists: true, not_suppressed: true } } }, "fallback"), "not_ready: sequence_exists=true");
 
 const baseSequence = {
   id: "seq-1",
@@ -128,6 +133,51 @@ assert.equal(readyToGenerate.readiness.key, "ready_to_generate");
 assert.equal(readyToGenerate.readiness.label, "Ready to generate");
 assert.equal(readyToGenerate.nextAction.key, "generate");
 assert.equal(readyToGenerate.readyToGenerate, true);
+assert.equal(readyToGenerate.generateEligible, true);
+assert.deepEqual(readyToGenerate.generateBlockers, []);
+
+const legacyNotReadyCanGenerate = deriveOutreachStatus({
+  leadId: "dfa83244-018b-4912-8a5e-ef53ad8da8e8",
+  lead: {
+    primary_email: "silvia@example.com",
+    domain: "silvia-navarro.com",
+    outreach: {
+      ready_to_generate: false,
+      readiness_status: "not_ready",
+      blockers: ["legacy readiness not_ready"],
+    },
+  },
+  sequence: null,
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { generate: true },
+});
+assert.equal(legacyNotReadyCanGenerate.readiness.key, "not_ready");
+assert.equal(legacyNotReadyCanGenerate.readyToGenerate, false);
+assert.equal(legacyNotReadyCanGenerate.generateEligible, true);
+assert.equal(legacyNotReadyCanGenerate.nextAction.key, "generate");
+assert.deepEqual(legacyNotReadyCanGenerate.generateBlockers, []);
+assert.match(legacyNotReadyCanGenerate.warnings.join(" "), /legacy readiness not_ready/i);
+
+const notReadyMissingEmailCannotGenerate = deriveOutreachStatus({
+  leadId: "lead-missing-email",
+  lead: {
+    outreach: {
+      ready_to_generate: false,
+      readiness_status: "not_ready",
+    },
+  },
+  sequence: null,
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { generate: true },
+});
+assert.equal(notReadyMissingEmailCannotGenerate.generateEligible, false);
+assert.match(notReadyMissingEmailCannotGenerate.generateBlockers.join(" "), /missing recipient email/i);
 
 const launchReady = deriveOutreachStatus({
   leadId: qaLeadId,
@@ -142,6 +192,36 @@ const launchReady = deriveOutreachStatus({
 assert.equal(launchReady.launchEligible, true);
 assert.equal(launchReady.nextAction.key, "launch");
 
+const pendingMissingToolUrl = deriveOutreachStatus({
+  leadId: "lead-with-draft",
+  lead: { primary_email: "buyer@example.com" },
+  sequence: { ...baseSequence, id: "seq-no-tool", metadata: { recipient_email: "buyer@example.com" } },
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { approve: true, launch: true },
+});
+assert.equal(pendingMissingToolUrl.readiness.key, "pending_review");
+assert.equal(pendingMissingToolUrl.canApprove, true);
+assert.deepEqual(pendingMissingToolUrl.blockers, []);
+assert.match(pendingMissingToolUrl.warnings.join(" "), /missing tool URL/i);
+assert.deepEqual(pendingMissingToolUrl.launchBlockers, []);
+
+const pendingBackendMissingToolUrl = deriveOutreachStatus({
+  leadId: "lead-with-backend-warning",
+  lead: { primary_email: "buyer@example.com", outreach_blockers: ["missing tool URL"] },
+  sequence: { ...baseSequence, id: "seq-backend-no-tool", metadata: { recipient_email: "buyer@example.com" } },
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { approve: true },
+});
+assert.equal(pendingBackendMissingToolUrl.canApprove, true);
+assert.deepEqual(pendingBackendMissingToolUrl.blockers, []);
+assert.match(pendingBackendMissingToolUrl.warnings.join(" "), /missing tool URL/i);
+
 const suppressed = deriveOutreachStatus({
   leadId: qaLeadId,
   lead: { primary_email: "miguelcarmonar@gmail.com" },
@@ -154,6 +234,28 @@ const suppressed = deriveOutreachStatus({
 assert.equal(suppressed.readiness.key, "blocked");
 assert.equal(suppressed.lifecycle.key, "suppressed");
 assert.match(suppressed.blockers.join(" "), /suppression/i);
+
+const approvedNotScheduled = deriveOutreachStatus({
+  leadId: "lead-approved",
+  lead: { primary_email: "buyer@example.com" },
+  sequence: {
+    ...baseSequence,
+    id: "seq-approved-no-tool",
+    lead_id: "lead-approved",
+    review_status: "approved",
+    send_status: "not_scheduled",
+    metadata: { recipient_email: "buyer@example.com" },
+  },
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { launch: true },
+});
+assert.equal(approvedNotScheduled.readiness.key, "approved");
+assert.equal(approvedNotScheduled.launchEligible, true);
+assert.deepEqual(deriveOutreachFilters(approvedNotScheduled), ["ready_to_launch"]);
+assert.deepEqual(approvedNotScheduled.launchBlockers, []);
 
 assert.deepEqual(deriveOutreachFilters(pendingDryRun), ["needs_review"]);
 assert.deepEqual(deriveOutreachFilters(delivered), ["launched", "engaged"]);
