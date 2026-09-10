@@ -106,6 +106,17 @@ function isGenerateHardBlocker(value) {
   ].some((needle) => message.includes(needle));
 }
 
+function isNoEnviableFailedDraft(sequence) {
+  if (!sequence) return false;
+  const metadata = pickMetadata(sequence);
+  const subject = normalize(sequence.subject);
+  const review = normalize(sequence.review_status || metadata.review_status);
+  const stage = metadata.no_enviable_stage;
+  const reasons = metadata.motivo_no_enviable || sequence.not_ready_reasons || [];
+  const hasNoEnviableReason = Array.isArray(reasons) ? reasons.length > 0 : Boolean(reasons);
+  return subject === "no_enviable" || review === "not_ready" && (Boolean(stage) || hasNoEnviableReason);
+}
+
 function isReadinessWarning(value) {
   const message = normalizedMessage(value);
   return isMissingToolUrl(message) || [
@@ -254,7 +265,8 @@ function buildJourney({ readinessKey, lifecycleKey, flags, sequence, generateEli
 function generateBlockersFrom({ email, sequence, blockers = [], lifecycleKey }) {
   const generateBlockers = [];
   if (!email) pushUnique(generateBlockers, "missing recipient email");
-  if (sequence) pushUnique(generateBlockers, "existing sequence");
+  const failedDraft = isNoEnviableFailedDraft(sequence);
+  if (sequence && !failedDraft) pushUnique(generateBlockers, "existing sequence");
   if (["suppressed", "submitted", "import_pending", "imported", "sent", "opened", "clicked", "replied"].includes(lifecycleKey)) {
     pushUnique(generateBlockers, `existing lifecycle ${lifecycleKey}`);
   }
@@ -274,11 +286,13 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
   const activeSuppression = suppression && suppression.active !== false ? suppression : null;
   if (activeSuppression) blockers.push("active suppression");
 
+  const failedDraft = isNoEnviableFailedDraft(sequence);
   const backendBlockers = readModel?.blockers || lead?.outreach_blockers || sequence?.blockers || sequence?.readiness_blockers;
   if (Array.isArray(backendBlockers)) {
     for (const blocker of backendBlockers) {
       const message = typeof blocker === "string" ? blocker : blocker?.message || blocker?.reason || JSON.stringify(blocker);
-      if (isReadinessWarning(message) && !isGenerateHardBlocker(message)) pushUnique(warnings, message);
+      if (failedDraft && normalizedMessage(message).includes("existing sequence")) pushUnique(warnings, message);
+      else if (isReadinessWarning(message) && !isGenerateHardBlocker(message)) pushUnique(warnings, message);
       else pushUnique(blockers, message);
     }
   }

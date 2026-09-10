@@ -179,6 +179,37 @@ const notReadyMissingEmailCannotGenerate = deriveOutreachStatus({
 assert.equal(notReadyMissingEmailCannotGenerate.generateEligible, false);
 assert.match(notReadyMissingEmailCannotGenerate.generateBlockers.join(" "), /missing recipient email/i);
 
+const noEnviableFailedDraft = deriveOutreachStatus({
+  leadId: "lead-failed-copy",
+  lead: {
+    primary_email: "buyer@example.com",
+    outreach_blockers: ["existing sequence"],
+  },
+  sequence: {
+    id: "seq-no-enviable",
+    lead_id: "lead-failed-copy",
+    subject: "NO_ENVIABLE",
+    initial_email: "NO_ENVIABLE: falla Entregable: faltan fuentes requeridas ['brand_reviews']",
+    status: "draft",
+    review_status: "not_ready",
+    send_status: "dry_run",
+    metadata: {
+      no_enviable_stage: "selector",
+      motivo_no_enviable: ["falla Entregable: faltan fuentes requeridas ['brand_reviews']"],
+    },
+  },
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { generate: true },
+});
+assert.equal(noEnviableFailedDraft.generateEligible, true);
+assert.deepEqual(noEnviableFailedDraft.generateBlockers, []);
+assert.deepEqual(noEnviableFailedDraft.blockers, []);
+assert.match(noEnviableFailedDraft.warnings.join(" "), /existing sequence/i);
+assert.equal(noEnviableFailedDraft.nextAction.key, "generate");
+
 const launchReady = deriveOutreachStatus({
   leadId: qaLeadId,
   lead: { primary_email: "miguelcarmonar@gmail.com" },
