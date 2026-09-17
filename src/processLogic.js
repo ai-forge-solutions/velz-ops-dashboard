@@ -67,12 +67,15 @@ export function normalizeProcessStep(step) {
   };
 }
 
-export function resolveProcessBrandIds({ brands = [], selectedIds = new Set(), scope = "all", fitScoreMin = 70, limit = 500 } = {}) {
+export function resolveProcessBrandIds({ brands = [], selectedIds = new Set(), scope = "all", fitScoreMin = 70, limit = 500, groupBrandIds = [] } = {}) {
+  const groupIds = new Set(groupBrandIds || []);
   const rows = scope === "selected"
     ? brands.filter((brand) => selectedIds.has(brand.id))
-    : scope === "fit_score"
-      ? brands.filter((brand) => Number(brand.fit ?? brand.fit_score ?? 0) >= Number(fitScoreMin))
-      : brands;
+    : scope === "group"
+      ? brands.filter((brand) => groupIds.has(brand.id))
+      : scope === "fit_score"
+        ? brands.filter((brand) => Number(brand.fit ?? brand.fit_score ?? 0) >= Number(fitScoreMin))
+        : brands;
   return rows.slice(0, Math.max(0, Number(limit) || 0)).map((brand) => brand.id);
 }
 

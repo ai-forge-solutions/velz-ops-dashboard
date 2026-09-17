@@ -4,12 +4,19 @@ import { cleanup, render, screen, within, waitFor } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 
 const mockLoadDashboardBrands = vi.fn();
+const mockLoadBrandGroups = vi.fn();
+const mockSaveBrandGroup = vi.fn();
+const mockDeleteBrandGroup = vi.fn();
 const mockRunConductorService = vi.fn();
 const mockGetMetaAdLibraryRun = vi.fn();
 const mockGenerateOutreachSequence = vi.fn();
+const mockPreviewProcess = vi.fn();
 
 vi.mock("./supabaseData", () => ({
   loadDashboardBrands: mockLoadDashboardBrands,
+  loadBrandGroups: mockLoadBrandGroups,
+  saveBrandGroup: mockSaveBrandGroup,
+  deleteBrandGroup: mockDeleteBrandGroup,
 }));
 
 vi.mock("./conductorApi", async () => {
@@ -21,7 +28,7 @@ vi.mock("./conductorApi", async () => {
     runConductorPipeline: vi.fn(),
     getMetaAdLibraryRun: mockGetMetaAdLibraryRun,
     getProcessRun: vi.fn(),
-    previewProcess: vi.fn(),
+    previewProcess: mockPreviewProcess,
     runProcess: vi.fn(),
     executeProcess: vi.fn(),
   };
@@ -39,6 +46,24 @@ const brand = {
   fit: 82,
   runs: {},
   outreach: null,
+};
+
+const secondBrand = {
+  id: "9ac8c4fb-305d-4e8f-82ec-097559dc7f58",
+  name: "Velz Test Store",
+  domain: "velz-test.example",
+  revenue: 8000,
+  fit: 78,
+  runs: {},
+  outreach: null,
+};
+
+const qaGroup = {
+  id: "group-qa",
+  name: "Grupo QA",
+  description: "",
+  brandCount: 1,
+  brandIds: [brand.id],
 };
 
 const readyToGenerateOutreach = {
@@ -91,12 +116,17 @@ async function renderLoadedApp() {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   delete globalThis.__VELZ_RUNTIME_CONFIG__;
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {} }]);
+  mockLoadBrandGroups.mockResolvedValue([]);
+  mockSaveBrandGroup.mockResolvedValue({ id: "group-1", name: "Grupo QA", description: "", brandCount: 1, brandIds: [brand.id] });
+  mockDeleteBrandGroup.mockResolvedValue(undefined);
+  mockPreviewProcess.mockResolvedValue({ brand_count: 1, total_items_estimated: 5 });
   mockRunConductorService.mockResolvedValue({
     success: true,
     status: "success",
@@ -105,6 +135,61 @@ beforeEach(() => {
   });
   mockGetMetaAdLibraryRun.mockResolvedValue({});
   mockGenerateOutreachSequence.mockResolvedValue({ message: "Drafting completado.", sequence: generatedSequence });
+});
+
+describe("Brand group MVP", () => {
+  it("creates a persisted group from the current selection and selects it without a manual reload", async () => {
+    const user = userEvent.setup();
+    const savedGroup = { ...qaGroup, brandCount: 2, brandIds: [brand.id, secondBrand.id] };
+    mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {} }, { ...secondBrand, runs: {} }]);
+    mockSaveBrandGroup.mockResolvedValue(savedGroup);
+
+    await renderLoadedApp();
+    const table = screen.getByRole("table");
+    const rowCheckboxes = within(table).getAllByRole("checkbox");
+    await user.click(rowCheckboxes[0]);
+    await user.click(rowCheckboxes[1]);
+    await user.type(screen.getByRole("textbox", { name: /Nombre del grupo/i }), "Grupo QA");
+    await user.click(screen.getByRole("button", { name: /Crear grupo/i }));
+
+    await waitFor(() => expect(mockSaveBrandGroup).toHaveBeenCalledWith({
+      name: "Grupo QA",
+      brandIds: [brand.id, secondBrand.id],
+    }));
+    expect(screen.getByText(/Grupo “Grupo QA” creado con 2 marcas/)).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: /Grupo:/i }).value).toBe("group-qa");
+  });
+
+  it("filters runs by group and selects exactly the visible brands", async () => {
+    const user = userEvent.setup();
+    mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {} }, { ...secondBrand, runs: {} }]);
+    mockLoadBrandGroups.mockResolvedValue([qaGroup]);
+
+    await renderLoadedApp();
+    await user.selectOptions(screen.getByRole("combobox", { name: /Grupo:/i }), "group-qa");
+
+    expect(screen.getAllByText("OcCre").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Velz Test Store")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /Seleccionar visibles/i }));
+    const table = screen.getByRole("table");
+    expect(within(table).getAllByRole("checkbox").filter((checkbox) => checkbox.checked)).toHaveLength(1);
+  });
+
+  it("sends group brand_ids to the real process preview payload", async () => {
+    const user = userEvent.setup();
+    mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {} }, { ...secondBrand, runs: {} }]);
+    mockLoadBrandGroups.mockResolvedValue([qaGroup]);
+
+    await renderLoadedApp();
+    await user.click(screen.getByRole("button", { name: "Procesos" }));
+    await user.click(screen.getByRole("radio", { name: /Grupo/i }));
+    await user.click(screen.getByRole("button", { name: /Preview real/i }));
+
+    await waitFor(() => expect(mockPreviewProcess).toHaveBeenCalled());
+    expect(mockPreviewProcess.mock.calls[0][0].brand_ids).toEqual([brand.id]);
+    expect(screen.getByText("Preview real generado por el backend de procesos.")).toBeTruthy();
+  });
 });
 
 describe("Outreach generate availability", () => {
