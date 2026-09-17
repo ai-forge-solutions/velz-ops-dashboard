@@ -149,6 +149,23 @@ function interpolateOutreachPath(path, { leadId, sequenceId }) {
     .replace(/\{sequenceId\}/g, encodeURIComponent(sequenceId || ""));
 }
 
+function isIdempotentSequenceExistsPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  return payload.sequence_exists === true &&
+    payload.ready_to_review === true &&
+    payload.next_action === "approve_sequence";
+}
+
+function idempotentSequenceExistsResult(payload) {
+  return {
+    ...payload,
+    success: true,
+    status: payload.status || "success",
+    idempotent: true,
+    message: payload.message || "Draft ya existe — pendiente de revisión",
+  };
+}
+
 export function buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId } = {}) {
   const path = outreachActionPath(action);
   if (!baseUrl || !path) return null;
@@ -183,6 +200,9 @@ async function outreachRequest(action, { leadId, sequenceId, body = {}, method =
     }
   }
   if (!response.ok) {
+    if (response.status === 409 && action === "generate" && isIdempotentSequenceExistsPayload(payload)) {
+      return idempotentSequenceExistsResult(payload);
+    }
     throw new Error(normalizeErrorPayload(payload, `Outreach ${action} respondió HTTP ${response.status}`));
   }
   return payload;
