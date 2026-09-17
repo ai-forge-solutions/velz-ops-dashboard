@@ -29,6 +29,8 @@ assert.deepEqual(
 
 const defaults = defaultProcessSteps();
 assert.equal(PROCESS_STEP_OPTIONS.some((step) => step.id === "similarweb"), false);
+assert.equal(PROCESS_STEP_OPTIONS.find((step) => step.id === "web_stack_wappalyzer").label, "Tech Stack");
+assert.equal(PROCESS_STEP_OPTIONS.find((step) => step.id === "web_stack_wappalyzer").group, "ETL");
 assert.equal(PROCESS_STEP_OPTIONS.find((step) => step.id === "email_generation").label, "Drafting");
 assert.equal(PROCESS_STEP_OPTIONS.find((step) => step.id === "email_send").label, "Export");
 assert.equal(defaults.find((step) => step.id === "brand_context").mode, "preserve_success");

@@ -1,6 +1,7 @@
 export const PROCESS_STEP_OPTIONS = [
   { id: "brand_context", label: "Contexto de marca", defaultMode: "preserve_success", group: "ETL" },
   { id: "meta_ads", label: "Meta Ads", defaultMode: "preserve_success", group: "ETL" },
+  { id: "web_stack_wappalyzer", label: "Tech Stack", defaultMode: "preserve_success", group: "ETL" },
   { id: "shopify_signals", label: "Shopify Signals", defaultMode: "preserve_success", group: "ETL" },
   { id: "reviews", label: "Reviews", defaultMode: "preserve_success", group: "ETL" },
   { id: "email_generation", label: "Drafting", defaultMode: "overwrite", group: "Outreach" },
