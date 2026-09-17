@@ -33,7 +33,7 @@ import {
   processStepLabel,
   resolveProcessBrandIds,
 } from "./processLogic";
-import { deriveOutreachFilters } from "./outreachStatus";
+import { deriveOutreachFilters, deriveOutreachStatus } from "./outreachStatus";
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
 // in the velz-outreach Supabase project when type="conductor". Outreach actions
@@ -238,6 +238,37 @@ function activeMetaAdRunIds(brands) {
     .map((run) => run.service_run_id);
 }
 
+function sequenceFromGenerateResult(result) {
+  if (!result || typeof result !== "object") return null;
+  return result.sequence || result.email_sequence || result.data?.sequence || null;
+}
+
+function outreachWithGeneratedSequence(outreach, sequence) {
+  if (!outreach || !sequence) return outreach;
+  const lead = outreach.lead || { primary_email: outreach.email, email: outreach.email };
+  return deriveOutreachStatus({
+    leadId: outreach.leadId || sequence.lead_id,
+    lead: {
+      ...lead,
+      ready_to_generate: false,
+      outreach: {
+        ...(lead.outreach || {}),
+        ready_to_generate: false,
+      },
+    },
+    sequence,
+    send: outreach.send || null,
+    events: Object.entries(outreach.events?.counts || {}).flatMap(([event_type, count]) => (
+      Array.from({ length: count }, () => ({ event_type }))
+    )),
+    magnetEvents: Object.entries(outreach.magnetEvents?.counts || {}).flatMap(([event_type, count]) => (
+      Array.from({ length: count }, () => ({ event_type }))
+    )),
+    suppression: outreach.suppression || null,
+    actionConfigured: outreach.actionConfigured || {},
+  });
+}
+
 function runSummaryChunks(run) {
   const summary = run?.response_payload?.summary;
   if (!summary || typeof summary !== "object") return [];
@@ -315,6 +346,14 @@ export default function App() {
     });
   }
 
+  function patchOutreachSequence(brandId, sequence) {
+    if (!sequence) return;
+    setBrands(prev => prev.map(b => b.id !== brandId ? b : {
+      ...b,
+      outreach: outreachWithGeneratedSequence(b.outreach, sequence),
+    }));
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -382,15 +421,19 @@ export default function App() {
 
     markServiceRunning(brandId, serviceKey);
     const brandName = brand?.name || brandId;
+    let generatedSequence = null;
     setActionMessage({ tone: "success", text: `Lanzando ${serviceLabel(serviceKey)} para ${brandName}…` });
     try {
       if (service?.type === "outreach" && service.action === "generate") {
         const result = await generateOutreachSequence(brand.outreach.leadId);
+        generatedSequence = sequenceFromGenerateResult(result);
         updateRun(brandId, serviceKey, {
           status: "success",
           message: result?.message || "Drafting completado por el backend de Outreach.",
           response_payload: result,
         });
+        patchOutreachSequence(brandId, generatedSequence);
+        setActionMessage({ tone: "success", text: result?.message || "Drafting completado por el backend de Outreach." });
       } else if (service?.type === "outreach" && service.action === "launch") {
         const sequenceId = sequenceIdFor(brand.outreach.sequence);
         const result = await launchSaleshandyQaBulk(sequenceId, brand.outreach.leadId);
@@ -412,8 +455,10 @@ export default function App() {
     } finally {
       try {
         await refreshDashboardBrands();
+        patchOutreachSequence(brandId, generatedSequence);
       } catch (error) {
         setActionMessage({ tone: "error", text: `El servicio terminó, pero no se pudo refrescar Supabase: ${error.message}` });
+        patchOutreachSequence(brandId, generatedSequence);
       }
     }
   }

@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 const mockLoadDashboardBrands = vi.fn();
 const mockRunConductorService = vi.fn();
 const mockGetMetaAdLibraryRun = vi.fn();
+const mockGenerateOutreachSequence = vi.fn();
 
 vi.mock("./supabaseData", () => ({
   loadDashboardBrands: mockLoadDashboardBrands,
@@ -16,6 +17,7 @@ vi.mock("./conductorApi", async () => {
   return {
     ...actual,
     runConductorService: mockRunConductorService,
+    generateOutreachSequence: mockGenerateOutreachSequence,
     runConductorPipeline: vi.fn(),
     getMetaAdLibraryRun: mockGetMetaAdLibraryRun,
     getProcessRun: vi.fn(),
@@ -39,6 +41,48 @@ const brand = {
   outreach: null,
 };
 
+const readyToGenerateOutreach = {
+  leadId: "lead-1",
+  lead: { primary_email: "buyer@example.com", ready_to_generate: true },
+  sequence: null,
+  send: null,
+  events: { counts: {}, latestEvent: null },
+  magnetEvents: { counts: {}, latestEvent: null },
+  email: "buyer@example.com",
+  readiness: { key: "ready_to_generate", label: "Ready to generate" },
+  lifecycle: { key: "not_launched", label: "Not launched" },
+  provider: {},
+  blockers: [],
+  warnings: [],
+  launchBlockers: [],
+  readyToGenerate: true,
+  generateEligible: true,
+  generateBlockers: [],
+  canApprove: false,
+  canReject: false,
+  launchEligible: false,
+  actionConfigured: { generate: true, approve: true, reject: true, launch: true },
+  journey: [
+    { key: "readiness", status: "done" },
+    { key: "sequence", status: "current" },
+    { key: "review", status: "pending" },
+    { key: "saleshandy", status: "pending" },
+    { key: "engagement", status: "pending" },
+  ],
+  nextAction: { key: "generate", label: "Generate sequence" },
+};
+
+const generatedSequence = {
+  id: "seq-1",
+  lead_id: "lead-1",
+  subject: "Precio y antigüedad",
+  status: "draft",
+  review_status: "pending_review",
+  send_status: "not_scheduled",
+  metadata: { recipient_email: "buyer@example.com", public_tool_url: "https://velz.test/tool/1" },
+  created_at: "2026-09-17T12:00:00Z",
+};
+
 async function renderLoadedApp() {
   const App = (await import("./App.jsx")).default;
   render(<App />);
@@ -47,6 +91,7 @@ async function renderLoadedApp() {
 
 afterEach(() => {
   cleanup();
+  delete globalThis.__VELZ_RUNTIME_CONFIG__;
 });
 
 beforeEach(() => {
@@ -59,6 +104,7 @@ beforeEach(() => {
     service_run_id: "service-run-1",
   });
   mockGetMetaAdLibraryRun.mockResolvedValue({});
+  mockGenerateOutreachSequence.mockResolvedValue({ message: "Drafting completado.", sequence: generatedSequence });
 });
 
 describe("Outreach generate availability", () => {
@@ -104,6 +150,23 @@ describe("Outreach generate availability", () => {
 });
 
 describe("RunsView service popovers", () => {
+  it("patches Outreach state immediately from a generated draft even when the Supabase refresh is still stale", async () => {
+    globalThis.__VELZ_RUNTIME_CONFIG__ = { VITE_OUTREACH_API_BASE_URL: "https://outreach.example.com" };
+    const user = userEvent.setup();
+    const staleBrand = { ...brand, runs: {}, outreach: readyToGenerateOutreach };
+    mockLoadDashboardBrands.mockResolvedValue([staleBrand]);
+
+    await renderLoadedApp();
+
+    const mobileCard = screen.getByRole("article");
+    await user.click(within(mobileCard).getByRole("button", { name: /Drafting/i }));
+    await user.click(within(mobileCard).getByRole("button", { name: /Ejecutar ahora/i }));
+
+    expect(mockGenerateOutreachSequence).toHaveBeenCalledWith("lead-1");
+    await waitFor(() => expect(screen.getAllByText("Draft pending review").length).toBeGreaterThan(0));
+    expect(screen.getByText("Drafting completado.")).toBeTruthy();
+  });
+
   it("desktop service popover action triggers exactly one conductor request and shows immediate feedback", async () => {
     const user = userEvent.setup();
     let resolveConductor;

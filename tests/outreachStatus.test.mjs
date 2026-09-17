@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   OUTREACH_DEFAULT_ACTION_PATHS,
   buildOutreachActionUrl,
+  generateOutreachSequence,
   normalizeErrorPayload,
 } from "../src/conductorApi.js";
 import {
@@ -291,3 +292,22 @@ assert.deepEqual(approvedNotScheduled.launchBlockers, []);
 assert.deepEqual(deriveOutreachFilters(pendingDryRun), ["needs_review"]);
 assert.deepEqual(deriveOutreachFilters(delivered), ["launched", "engaged"]);
 assert.deepEqual(deriveOutreachFilters(suppressed), ["failed_blocked", "suppressed"]);
+
+globalThis.__VELZ_RUNTIME_CONFIG__ = { VITE_OUTREACH_API_BASE_URL: "https://outreach.example.com" };
+const originalFetch = globalThis.fetch;
+let capturedGenerateUrl = null;
+globalThis.fetch = async (url) => {
+  capturedGenerateUrl = String(url);
+  return new Response(JSON.stringify({
+    sequence_exists: true,
+    ready_to_review: true,
+    next_action: "approve_sequence",
+  }), { status: 409, headers: { "Content-Type": "application/json" } });
+};
+const idempotentGenerate = await generateOutreachSequence("lead-existing");
+assert.equal(capturedGenerateUrl, "https://outreach.example.com/outreach/leads/lead-existing/sequences/generate");
+assert.equal(idempotentGenerate.sequence_exists, true);
+assert.equal(idempotentGenerate.ready_to_review, true);
+assert.equal(idempotentGenerate.message, "Draft ya existe — pendiente de revisión");
+globalThis.fetch = originalFetch;
+delete globalThis.__VELZ_RUNTIME_CONFIG__;
