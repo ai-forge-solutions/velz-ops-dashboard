@@ -241,7 +241,7 @@ function nextActionFrom({ readinessKey, lifecycleKey, blockers, sequence, flags,
   if (["not_ready", "no_sequence"].includes(readinessKey)) return { key: "not_ready", label: "Resolve readiness blockers before generation" };
   if (lifecycleKey === "failed") return { key: "investigate_failure", label: "Investigate provider/send failure" };
   if (["submitted", "import_pending"].includes(lifecycleKey)) return { key: "wait_provider", label: "Wait for provider sync/reconciliation" };
-  if (flags.launchReady && configured.launch) return { key: "launch", label: "Launch Saleshandy" };
+  if (flags.launchReady && configured.launch) return { key: "launch", label: "Export to Instantly" };
   if (flags.launchReady && !configured.launch) return { key: "configure_launch", label: "Configure guarded launch endpoint" };
   if (sequence) return { key: "monitor", label: "Monitor Saleshandy lifecycle and engagement" };
   return { key: "blocked", label: "Missing outreach source data" };
