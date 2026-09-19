@@ -3,7 +3,7 @@ import {
   Check, X, Loader2, Clock, AlertTriangle, Minus, Play, Search,
   ChevronDown, Plus, Trash2, PlayCircle, Users, ChevronRight, Info, RotateCcw
 } from "lucide-react";
-import { loadDashboardBrands } from "./supabaseData";
+import { deleteBrandGroup, loadBrandGroups, loadDashboardBrands, saveBrandGroup } from "./supabaseData";
 import {
   conductorServiceAvailable,
   executeProcess,
@@ -283,9 +283,12 @@ function runSummaryChunks(run) {
 export default function App() {
   const [tab, setTab] = useState("runs");
   const [brands, setBrands] = useState([]);
+  const [brandGroups, setBrandGroups] = useState([]);
+  const [activeGroupId, setActiveGroupId] = useState("");
   const [loadingBrands, setLoadingBrands] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [search, setSearch] = useState("");
+  const [groupName, setGroupName] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [popover, setPopover] = useState(null); // {brandId, serviceKey}
   const [drawerBrand, setDrawerBrand] = useState(null);
@@ -298,8 +301,12 @@ export default function App() {
     if (showLoading) setLoadingBrands(true);
     setLoadError(null);
     try {
-      const rows = await loadDashboardBrands();
+      const [rows, groups] = await Promise.all([
+        loadDashboardBrands(),
+        loadBrandGroups(),
+      ]);
       setBrands(rows);
+      setBrandGroups(groups);
       return rows;
     } catch (error) {
       setLoadError(error);
@@ -361,8 +368,14 @@ export default function App() {
       setLoadingBrands(true);
       setLoadError(null);
       try {
-        const rows = await loadDashboardBrands();
-        if (!cancelled) setBrands(rows);
+        const [rows, groups] = await Promise.all([
+          loadDashboardBrands(),
+          loadBrandGroups(),
+        ]);
+        if (!cancelled) {
+          setBrands(rows);
+          setBrandGroups(groups);
+        }
       } catch (error) {
         if (!cancelled) setLoadError(error);
       } finally {
@@ -505,10 +518,69 @@ export default function App() {
     }
   }
 
-  const filtered = brands.filter(b =>
-    b.name.toLowerCase().includes(search.toLowerCase()) ||
-    b.domain.toLowerCase().includes(search.toLowerCase())
-  );
+  const activeGroup = brandGroups.find((group) => group.id === activeGroupId) || null;
+  const activeGroupBrandIds = new Set(activeGroup?.brandIds || []);
+  const filtered = brands.filter((b) => {
+    const matchesSearch = b.name.toLowerCase().includes(search.toLowerCase()) ||
+      b.domain.toLowerCase().includes(search.toLowerCase());
+    const matchesGroup = !activeGroup || activeGroupBrandIds.has(b.id);
+    return matchesSearch && matchesGroup;
+  });
+
+  function selectVisibleBrands() {
+    setSelected(new Set(filtered.map((brand) => brand.id)));
+  }
+
+  async function handleCreateGroup() {
+    const brandIds = Array.from(selected);
+    if (brandIds.length === 0) {
+      setActionMessage({ tone: "warning", text: "Selecciona al menos una marca antes de crear un grupo." });
+      return;
+    }
+    const name = groupName.trim();
+    if (!name) {
+      setActionMessage({ tone: "warning", text: "Escribe un nombre para crear el grupo." });
+      return;
+    }
+    try {
+      const group = await saveBrandGroup({ name, brandIds });
+      setBrandGroups((current) => [...current.filter((item) => item.id !== group.id), group].sort((a, b) => a.name.localeCompare(b.name)));
+      setActiveGroupId(group.id);
+      setGroupName("");
+      setActionMessage({ tone: "success", text: `Grupo “${group.name}” creado con ${group.brandCount} marcas.` });
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `No se pudo crear el grupo: ${error.message}` });
+    }
+  }
+
+  async function handleUpdateActiveGroup() {
+    if (!activeGroup) return;
+    try {
+      const group = await saveBrandGroup({
+        id: activeGroup.id,
+        name: activeGroup.name,
+        description: activeGroup.description,
+        brandIds: Array.from(selected),
+      });
+      setBrandGroups((current) => current.map((item) => item.id === group.id ? group : item));
+      setActionMessage({ tone: "success", text: `Grupo “${group.name}” actualizado con ${group.brandCount} marcas.` });
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `No se pudo actualizar el grupo: ${error.message}` });
+    }
+  }
+
+  async function handleDeleteActiveGroup() {
+    if (!activeGroup) return;
+    if (!window.confirm(`¿Borrar el grupo “${activeGroup.name}”?`)) return;
+    try {
+      await deleteBrandGroup(activeGroup.id);
+      setBrandGroups((current) => current.filter((item) => item.id !== activeGroup.id));
+      setActiveGroupId("");
+      setActionMessage({ tone: "success", text: `Grupo “${activeGroup.name}” borrado.` });
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `No se pudo borrar el grupo: ${error.message}` });
+    }
+  }
 
   function toggleRow(id) {
     setSelected(prev => {
@@ -559,12 +631,22 @@ export default function App() {
           triggerService={triggerService} triggerPipeline={triggerPipeline} triggerBulk={triggerBulk}
           popover={popover} setPopover={setPopover} popRef={popRef}
           openBrandDrawer={setDrawerBrand}
+          brandGroups={brandGroups}
+          activeGroupId={activeGroupId}
+          setActiveGroupId={setActiveGroupId}
+          groupName={groupName}
+          setGroupName={setGroupName}
+          onCreateGroup={handleCreateGroup}
+          onUpdateGroup={handleUpdateActiveGroup}
+          onDeleteGroup={handleDeleteActiveGroup}
+          onSelectVisible={selectVisibleBrands}
         />
       ) : tab === "outreach" ? (
         <OutreachView brands={filtered} loading={loadingBrands} error={loadError} openBrandDrawer={setDrawerBrand} />
       ) : (
         <ProcessesView
           brands={brands} selected={selected}
+          brandGroups={brandGroups}
           actionMessage={actionMessage}
           setActionMessage={setActionMessage}
           clearActionMessage={() => setActionMessage(null)}
@@ -584,7 +666,8 @@ export default function App() {
 }
 
 // ---------------------------------------------------------------------------
-function RunsView({ brands, search, setSearch, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer }) {
+function RunsView({ brands, search, setSearch, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer, brandGroups, activeGroupId, setActiveGroupId, groupName, setGroupName, onCreateGroup, onUpdateGroup, onDeleteGroup, onSelectVisible }) {
+  const activeGroup = brandGroups.find((group) => group.id === activeGroupId) || null;
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
       {/* Toolbar */}
@@ -594,6 +677,39 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Buscar marca o dominio…"
             className="w-full bg-transparent text-sm outline-none sm:w-56 sm:text-xs" />
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <label className="flex items-center gap-2 rounded-md px-3 py-2 sm:py-1.5" style={{ border: `1px solid ${COLORS.line}` }}>
+            <span style={{ color: COLORS.muted }}>Grupo:</span>
+            <select value={activeGroupId} onChange={(event) => setActiveGroupId(event.target.value)} className="bg-transparent outline-none">
+              <option value="">Todos</option>
+              {brandGroups.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.brandCount})</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={onSelectVisible} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
+            Seleccionar visibles
+          </button>
+          <input
+            aria-label="Nombre del grupo"
+            value={groupName}
+            onChange={(event) => setGroupName(event.target.value)}
+            placeholder="Nombre del grupo"
+            className="w-44 rounded px-2.5 py-1 outline-none"
+            style={{ border: `1px solid ${COLORS.line}` }}
+          />
+          <button type="button" onClick={onCreateGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ background: COLORS.ink, color: "#fff" }}>
+            <Plus size={11} /> Crear grupo
+          </button>
+          {activeGroup && (
+            <>
+              <button type="button" onClick={onUpdateGroup} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
+                Actualizar grupo
+              </button>
+              <button type="button" onClick={onDeleteGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
+                <Trash2 size={11} /> Borrar grupo
+              </button>
+            </>
+          )}
         </div>
         {selected.size > 0 && (
           <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -976,8 +1092,9 @@ function OutreachView({ brands, loading, error, openBrandDrawer }) {
 }
 
 // ---------------------------------------------------------------------------
-function ProcessesView({ brands, selected, actionMessage, setActionMessage, clearActionMessage }) {
+function ProcessesView({ brands, selected, brandGroups, actionMessage, setActionMessage, clearActionMessage }) {
   const [scope, setScope] = useState("selected");
+  const [processGroupId, setProcessGroupId] = useState("");
   const [fitScoreMin, setFitScoreMin] = useState(70);
   const [limit, setLimit] = useState(500);
   const [steps, setSteps] = useState(defaultProcessSteps);
@@ -995,7 +1112,9 @@ function ProcessesView({ brands, selected, actionMessage, setActionMessage, clea
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [executingRunId, setExecutingRunId] = useState(null);
 
-  const brandIds = resolveProcessBrandIds({ brands, selectedIds: selected, scope, fitScoreMin, limit });
+  const selectedProcessGroup = brandGroups.find((group) => group.id === processGroupId) || brandGroups[0] || null;
+  const groupBrandIds = selectedProcessGroup?.brandIds || [];
+  const brandIds = resolveProcessBrandIds({ brands, selectedIds: selected, scope, fitScoreMin, limit, groupBrandIds });
   const payload = buildProcessPayload({ brandIds, fitScoreMin, limit, steps, strategy, maxConcurrency, continueOnError });
   const currentSignature = payloadSignature(payload);
   const previewIsCurrent = validatedSignature === currentSignature;
@@ -1155,10 +1274,23 @@ function ProcessesView({ brands, selected, actionMessage, setActionMessage, clea
 
         <section className="mb-5">
           <label className="mb-2 block text-[11px]" style={{ color: COLORS.muted }}>Marcas</label>
-          <div className="grid gap-2 text-xs sm:grid-cols-3">
+          <div className="grid gap-2 text-xs sm:grid-cols-4">
             <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "selected" ? COLORS.ink : COLORS.line}` }}>
               <input type="radio" checked={scope === "selected"} onChange={() => { setScope("selected"); resetPreviewState(); }} className="mr-2" />
               Seleccionadas ({selected.size})
+            </label>
+            <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "group" ? COLORS.ink : COLORS.line}` }}>
+              <input type="radio" checked={scope === "group"} disabled={brandGroups.length === 0} onChange={() => { setScope("group"); resetPreviewState(); }} className="mr-2" />
+              Grupo
+              <select
+                disabled={brandGroups.length === 0}
+                value={selectedProcessGroup?.id || ""}
+                onChange={(event) => { setProcessGroupId(event.target.value); setScope("group"); resetPreviewState(); }}
+                className="mt-2 w-full rounded px-1 py-0.5"
+                style={{ border: `1px solid ${COLORS.line}` }}
+              >
+                {brandGroups.length === 0 ? <option value="">Sin grupos</option> : brandGroups.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.brandCount})</option>)}
+              </select>
             </label>
             <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "fit_score" ? COLORS.ink : COLORS.line}` }}>
               <input type="radio" checked={scope === "fit_score"} onChange={() => { setScope("fit_score"); resetPreviewState(); }} className="mr-2" />

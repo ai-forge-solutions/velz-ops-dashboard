@@ -27,6 +27,16 @@ assert.deepEqual(
   ["brand-a"],
 );
 
+assert.deepEqual(
+  resolveProcessBrandIds({ brands, scope: "group", groupBrandIds: ["brand-c", "brand-a"], limit: 10 }),
+  ["brand-a", "brand-c"],
+);
+
+assert.deepEqual(
+  resolveProcessBrandIds({ brands, scope: "group", groupBrandIds: ["brand-c", "brand-a"], limit: 1 }),
+  ["brand-a"],
+);
+
 const defaults = defaultProcessSteps();
 assert.equal(PROCESS_STEP_OPTIONS.some((step) => step.id === "similarweb"), false);
 assert.equal(PROCESS_STEP_OPTIONS.find((step) => step.id === "web_stack_wappalyzer").label, "Tech Stack");
