@@ -572,9 +572,9 @@ function OutreachSection({ brand, onRefresh }) {
 
           <div>
             <button onClick={() => setConfirming(true)} disabled={!canLaunch || busyAction} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canLaunch ? COLORS.green : COLORS.line, color: canLaunch ? "#fff" : COLORS.muted }}>
-              Launch Saleshandy
+              Export to Instantly
             </button>
-            {!configured && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/sequences/{'{sequence_id}'}/launch-saleshandy. VITE_OUTREACH_ORCHESTRATION_BASE_URL queda solo como alias legacy.</p>}
+            {!configured && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/sequences/{'{sequence_id}'}/launch-instantly. VITE_OUTREACH_ORCHESTRATION_BASE_URL queda solo como alias legacy.</p>}
             {configured && !sequenceId && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada: el read model aún no expone sequence_id; approve/reject/launch no usan lead_id como fallback.</p>}
             {configured && !outreach.launchEligible && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>CTA desactivada por el read model: launch solo aparece cuando backend marca launch-ready y no hay estado final/bloqueado.</p>}
             {configured && outreach.launchBlockers?.length > 0 && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Launch bloqueado hasta resolver: {outreach.launchBlockers.join(" · ")}. Aprobar la copy sigue permitido y no envía nada.</p>}

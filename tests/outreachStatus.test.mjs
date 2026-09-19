@@ -19,7 +19,7 @@ assert.deepEqual(OUTREACH_DEFAULT_ACTION_PATHS, {
   approve: "/outreach/sequences/{sequence_id}/approve",
   reject: "/outreach/sequences/{sequence_id}/reject",
   editDraft: "/outreach/sequences/{sequence_id}/draft-fields",
-  launch: "/outreach/sequences/{sequence_id}/launch-saleshandy",
+  launch: "/outreach/sequences/{sequence_id}/launch-instantly",
 });
 assert.equal(
   buildOutreachActionUrl("https://outreach.example.com/", "generate", { leadId: "lead 1" }),
@@ -39,7 +39,7 @@ assert.equal(
 );
 assert.equal(
   buildOutreachActionUrl("https://outreach.example.com", "launch", { sequenceId: "seq-1" }),
-  "https://outreach.example.com/outreach/sequences/seq-1/launch-saleshandy",
+  "https://outreach.example.com/outreach/sequences/seq-1/launch-instantly",
 );
 assert.throws(() => buildOutreachActionUrl("https://outreach.example.com", "launch", { leadId: qaLeadId }), /sequence_id/);
 assert.equal(normalizeErrorPayload({ detail: { blocker: "send_kill_switch_enabled" } }, "fallback"), "send_kill_switch_enabled");
