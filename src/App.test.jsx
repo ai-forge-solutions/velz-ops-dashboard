@@ -101,6 +101,10 @@ const generatedSequence = {
   id: "seq-1",
   lead_id: "lead-1",
   subject: "Precio y antigüedad",
+  initial_email: "Hola, vi oportunidades claras para mejorar vuestro flujo de venta.",
+  followups: [
+    { subject: "¿Lo revisamos?", body: "Te dejo una idea concreta para priorizar esta semana." },
+  ],
   status: "draft",
   review_status: "pending_review",
   send_status: "not_scheduled",
@@ -138,6 +142,38 @@ beforeEach(() => {
 });
 
 describe("Brand group MVP", () => {
+  it("exports selected lead sequences as markdown and can clear the current selection", async () => {
+    const user = userEvent.setup();
+    if (!URL.createObjectURL) URL.createObjectURL = vi.fn();
+    if (!URL.revokeObjectURL) URL.revokeObjectURL = vi.fn();
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:velz-export");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    mockLoadDashboardBrands.mockResolvedValue([
+      { ...brand, runs: {}, outreach: { ...readyToGenerateOutreach, sequence: generatedSequence } },
+      { ...secondBrand, runs: {}, outreach: null },
+    ]);
+
+    await renderLoadedApp();
+    const table = screen.getByRole("table");
+    await user.click(within(table).getAllByRole("checkbox")[0]);
+    await user.click(screen.getByRole("button", { name: /Exportar \.md/i }));
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    const exported = await createObjectURL.mock.calls[0][0].text();
+    expect(exported).toContain("# Secuencias Velz");
+    expect(exported).toContain("## OcCre");
+    expect(exported).toContain("**Subject:** Precio y antigüedad");
+    expect(exported).toContain("Hola, vi oportunidades claras");
+    expect(exported).toContain("### Followup 1: ¿Lo revisamos?");
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/1 seleccionadas/)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: /Deseleccionar todo/i }));
+    expect(within(table).getAllByRole("checkbox").filter((checkbox) => checkbox.checked)).toHaveLength(0);
+    expect(screen.queryByText(/seleccionadas/)).toBeNull();
+  });
+
   it("creates a persisted group from the current selection and selects it without a manual reload", async () => {
     const user = userEvent.setup();
     const savedGroup = { ...qaGroup, brandCount: 2, brandIds: [brand.id, secondBrand.id] };
