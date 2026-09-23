@@ -126,6 +126,23 @@ describe("BrandDrawer dashboard optimizations", () => {
     expect(screen.getByRole("button", { name: /Restaurar panel/i })).toBeTruthy();
   });
 
+  it("keeps generate blockers in the disabled button tooltip instead of a warning block", async () => {
+    await renderDrawer({
+      brand: {
+        ...brands[0],
+        outreach: {
+          ...baseOutreach,
+          generateEligible: false,
+          generateBlockers: ["existing sequence"],
+        },
+      },
+    });
+
+    const generateButton = screen.getByRole("button", { name: /^Generate$/i });
+    expect(generateButton.getAttribute("title")).toBe("Generate blocked by hard blockers: existing sequence");
+    expect(screen.queryByText(/Generate blocked by hard blockers/i)).toBeNull();
+  });
+
   it("places Generate inside Sequence draft / review and keeps the backend action", async () => {
     const user = userEvent.setup();
     const onRefresh = vi.fn();

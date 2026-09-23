@@ -237,7 +237,7 @@ const pendingMissingToolUrl = deriveOutreachStatus({
 assert.equal(pendingMissingToolUrl.readiness.key, "pending_review");
 assert.equal(pendingMissingToolUrl.canApprove, true);
 assert.deepEqual(pendingMissingToolUrl.blockers, []);
-assert.match(pendingMissingToolUrl.warnings.join(" "), /missing tool URL/i);
+assert.deepEqual(pendingMissingToolUrl.warnings, []);
 assert.deepEqual(pendingMissingToolUrl.launchBlockers, []);
 
 const pendingBackendMissingToolUrl = deriveOutreachStatus({
@@ -252,7 +252,7 @@ const pendingBackendMissingToolUrl = deriveOutreachStatus({
 });
 assert.equal(pendingBackendMissingToolUrl.canApprove, true);
 assert.deepEqual(pendingBackendMissingToolUrl.blockers, []);
-assert.match(pendingBackendMissingToolUrl.warnings.join(" "), /missing tool URL/i);
+assert.deepEqual(pendingBackendMissingToolUrl.warnings, []);
 
 const suppressed = deriveOutreachStatus({
   leadId: qaLeadId,

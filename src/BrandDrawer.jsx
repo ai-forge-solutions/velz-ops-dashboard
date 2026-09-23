@@ -420,6 +420,9 @@ function OutreachSection({ brand, onRefresh }) {
   const events = Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const magnetEvents = Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const canGenerate = Boolean(outreach?.generateEligible && actionConfigured.generate && !busyAction);
+  const generateBlockedTitle = outreach?.generateBlockers?.length
+    ? `Generate blocked by hard blockers: ${outreach.generateBlockers.join(" · ")}`
+    : undefined;
   const canApprove = Boolean(outreach?.canApprove && actionConfigured.approve && sequenceId && !outreach?.blockers?.length);
   const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequenceId);
   const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length && !outreach?.launchBlockers?.length);
@@ -507,7 +510,6 @@ function OutreachSection({ brand, onRefresh }) {
           <JourneyIndicator steps={outreach.journey} />
           {outreach.suppression && <EmptyState tone={COLORS.red}>Suppression activa: {outreach.suppression.reason || outreach.suppression.type || "sin motivo"}. No enviar.</EmptyState>}
           {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
-          {outreach.warnings?.length > 0 && <EmptyState tone={COLORS.amber}>Avisos no bloqueantes: {outreach.warnings.join(" · ")}</EmptyState>}
           <EmptyState tone={outreach.blockers?.length ? COLORS.amber : COLORS.green}>Siguiente acción: {outreach.nextAction?.label}</EmptyState>
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
@@ -515,15 +517,13 @@ function OutreachSection({ brand, onRefresh }) {
               <h4 className="font-medium">Sequence draft / review</h4>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <OutreachPill tone={tone}>{displayedReviewStatus}</OutreachPill>
-                <button onClick={() => runAction("generate", () => generateOutreachSequence(outreach.leadId))} disabled={!canGenerate || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canGenerate ? COLORS.ink : COLORS.line, color: canGenerate ? "#fff" : COLORS.muted }}>
+                <button onClick={() => runAction("generate", () => generateOutreachSequence(outreach.leadId))} disabled={!canGenerate || busyAction} title={generateBlockedTitle} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canGenerate ? COLORS.ink : COLORS.line, color: canGenerate ? "#fff" : COLORS.muted }}>
                   {busyAction === "generate" ? "Generating…" : "Generate"}
                 </button>
               </div>
             </div>
             {!actionConfigured.generate && <EmptyState>Generate disabled: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/leads/{'{lead_id}'}/sequences/generate.</EmptyState>}
             {actionConfigured.generate && !outreach.readyToGenerate && !outreach.generateBlockers?.length && <EmptyState tone={COLORS.amber}>Generate enabled with readiness warning: lead is not ready_to_generate; backend generator will make the final decision.</EmptyState>}
-            {outreach.warnings?.length > 0 && <EmptyState tone={COLORS.amber}>Generate readiness warnings (non-blocking): {outreach.warnings.join(" · ")}</EmptyState>}
-            {outreach.generateBlockers?.length > 0 && <EmptyState tone={COLORS.red}>Generate blocked by hard blockers: {outreach.generateBlockers.join(" · ")}</EmptyState>}
             <SequencePreview sequence={displayedSequence} editor={sequenceEditor} dispatchEditor={dispatchSequenceEditor} editableState={sequenceEditable} onSave={saveSequenceDraft} />
             {!sequenceEditable.editable && <div className="mt-3"><OutreachDiagnostics diagnostics={diagnostics} probe={probeResult} busy={probeBusy} onProbe={runOutreachProbe} /></div>}
             <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
