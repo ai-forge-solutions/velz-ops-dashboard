@@ -11,6 +11,7 @@ const mockRunConductorService = vi.fn();
 const mockGetMetaAdLibraryRun = vi.fn();
 const mockGenerateOutreachSequence = vi.fn();
 const mockPreviewProcess = vi.fn();
+const mockSetBrandGroupArchived = vi.fn();
 
 vi.mock("./supabaseData", () => ({
   loadDashboardBrands: mockLoadDashboardBrands,
@@ -29,6 +30,7 @@ vi.mock("./conductorApi", async () => {
     getMetaAdLibraryRun: mockGetMetaAdLibraryRun,
     getProcessRun: vi.fn(),
     previewProcess: mockPreviewProcess,
+    setBrandGroupArchived: mockSetBrandGroupArchived,
     runProcess: vi.fn(),
     executeProcess: vi.fn(),
   };
@@ -139,6 +141,7 @@ beforeEach(() => {
   });
   mockGetMetaAdLibraryRun.mockResolvedValue({});
   mockGenerateOutreachSequence.mockResolvedValue({ message: "Drafting completado.", sequence: generatedSequence });
+  mockSetBrandGroupArchived.mockResolvedValue({ affected_leads: 2 });
 });
 
 describe("Brand group MVP", () => {
@@ -244,6 +247,38 @@ describe("Brand group MVP", () => {
     await waitFor(() => expect(mockPreviewProcess).toHaveBeenCalled());
     expect(mockPreviewProcess.mock.calls[0][0].brand_ids).toEqual([brand.id]);
     expect(screen.getByText("Preview real generado por el backend de procesos.")).toBeTruthy();
+  });
+
+  it("hides archived leads by default and reveals them with the archived toggle", async () => {
+    const user = userEvent.setup();
+    mockLoadDashboardBrands.mockResolvedValue([
+      { ...brand, runs: {}, outreach: { ...readyToGenerateOutreach, archived: true, archive: { archivedAt: "2026-09-23T12:00:00Z" } } },
+      { ...secondBrand, runs: {}, outreach: null },
+    ]);
+
+    const App = (await import("./App.jsx")).default;
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("Velz Test Store").length).toBeGreaterThan(0));
+    expect(screen.queryByText("OcCre")).toBeNull();
+
+    await user.click(screen.getByRole("checkbox", { name: /Mostrar archivados/i }));
+    expect(screen.getAllByText("OcCre").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Archived/i).length).toBeGreaterThan(0);
+  });
+
+  it("archives an active group through Outreach API copy with cascade semantics", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {} }]);
+    mockLoadBrandGroups.mockResolvedValue([qaGroup]);
+
+    await renderLoadedApp();
+    await user.selectOptions(screen.getByRole("combobox", { name: /Grupo:/i }), "group-qa");
+    await user.click(screen.getByRole("button", { name: /Archivar grupo/i }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("archivará sus leads miembro individualmente"));
+    expect(mockSetBrandGroupArchived).toHaveBeenCalledWith("group-qa", true, "Archived group from Velz Ops Dashboard.");
+    await waitFor(() => expect(screen.getByText(/2 leads afectados/i)).toBeTruthy());
   });
 });
 
