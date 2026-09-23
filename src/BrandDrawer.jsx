@@ -190,9 +190,6 @@ function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSa
 
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
-        <button type="button" onClick={() => dispatchEditor({ type: "edit", sequence })} disabled={!editableState.editable} title={editableState.reason || "Edit sequence draft"} className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: editableState.editable ? COLORS.ink : COLORS.muted }}><Pencil size={12} /> Edit draft</button>
-      </div>
       {!editableState.editable && <EmptyState>{editableState.reason}</EmptyState>}
       {editor.result?.sequence?.review_status === "pending_review" && <EmptyState tone={COLORS.amber}>Saved. Review is pending again before approval/launch.</EmptyState>}
       <div className="rounded-md p-3" style={{ background: COLORS.wash }}>
@@ -435,6 +432,7 @@ function OutreachSection({ brand, onRefresh }) {
   const liveDiagnostics = outreachRuntimeDiagnostics();
   const editConfigured = Boolean(liveDiagnostics.editDraftConfigured);
   const sequenceEditable = isSequenceDraftEditable({ sequence: displayedSequence, configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
+  const sequenceIsEditing = sequenceEditor.mode === "edit" || sequenceEditor.mode === "saving";
 
   useEffect(() => {
     dispatchSequenceEditor({ type: "cancel", sequence });
@@ -491,17 +489,6 @@ function OutreachSection({ brand, onRefresh }) {
 
   return (
     <section className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-medium">Outreach</h3>
-          <p className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>Readiness → Generate sequence → Review/Approve → Launch Saleshandy → Engagement. Generate calls backend by lead_id; approve/reject/launch call backend by sequence_id.</p>
-        </div>
-        <div className="flex flex-col items-end gap-1">
-          <OutreachPill tone={tone}>{outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "Not ready")}</OutreachPill>
-          <OutreachPill tone={tone}>{outreach?.lifecycle?.label || "Not launched"}</OutreachPill>
-        </div>
-      </div>
-
       {brand.outreachLoadError && <EmptyState tone={COLORS.amber}>No se pudieron leer las tablas Outreach con la anon key actual: {brand.outreachLoadError.message}</EmptyState>}
       {!brand.outreachLoadError && !outreach && <EmptyState>No hay lead/outreach asociado a esta marca.</EmptyState>}
 
@@ -510,7 +497,6 @@ function OutreachSection({ brand, onRefresh }) {
           <JourneyIndicator steps={outreach.journey} />
           {outreach.suppression && <EmptyState tone={COLORS.red}>Suppression activa: {outreach.suppression.reason || outreach.suppression.type || "sin motivo"}. No enviar.</EmptyState>}
           {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
-          <EmptyState tone={outreach.blockers?.length ? COLORS.amber : COLORS.green}>Siguiente acción: {outreach.nextAction?.label}</EmptyState>
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -520,6 +506,9 @@ function OutreachSection({ brand, onRefresh }) {
                 <button onClick={() => runAction("generate", () => generateOutreachSequence(outreach.leadId))} disabled={!canGenerate || busyAction} title={generateBlockedTitle} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canGenerate ? COLORS.ink : COLORS.line, color: canGenerate ? "#fff" : COLORS.muted }}>
                   {busyAction === "generate" ? "Generating…" : "Generate"}
                 </button>
+                {displayedSequence && !sequenceIsEditing && (
+                  <button type="button" onClick={() => dispatchSequenceEditor({ type: "edit", sequence: displayedSequence })} disabled={!sequenceEditable.editable} title={sequenceEditable.reason || "Edit sequence draft"} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: sequenceEditable.editable ? COLORS.ink : COLORS.muted }}><Pencil size={13} /> Edit draft</button>
+                )}
               </div>
             </div>
             {!actionConfigured.generate && <EmptyState>Generate disabled: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/leads/{'{lead_id}'}/sequences/generate.</EmptyState>}
@@ -1106,6 +1095,7 @@ export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand
 
   if (!brand) return null;
 
+  const headerTone = outreachTone(brand.outreach);
   const hasRuns = runnableServices.length > 0;
   const width = fullscreen ? "100vw" : undefined;
   const navigationIndex = brandUniverse.findIndex((item) => item.id === brand.id);
@@ -1119,7 +1109,11 @@ export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand
         <header className="sticky top-0 z-10 flex items-start justify-between gap-3 px-4 py-4 sm:gap-4 sm:px-6" style={{ borderBottom: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em]" style={{ color: COLORS.muted }}>Verificación de marca</p>
-            <h1 className="mt-1 text-xl font-medium">{brand.name}</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-medium">{brand.name}</h1>
+              <OutreachPill tone={headerTone}>{brand.outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "Not ready")}</OutreachPill>
+              <OutreachPill tone={headerTone}>{brand.outreach?.lifecycle?.label || "Not launched"}</OutreachPill>
+            </div>
             <p className="mono text-[11px]" style={{ color: COLORS.muted }}>{brand.domain}</p>
             {canNavigateBrands && (
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
