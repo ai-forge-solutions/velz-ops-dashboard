@@ -155,6 +155,16 @@ assert.equal(readyToGenerate.nextAction.key, "generate");
 assert.equal(readyToGenerate.readyToGenerate, true);
 assert.equal(readyToGenerate.generateEligible, true);
 assert.deepEqual(readyToGenerate.generateBlockers, []);
+assert.equal(deriveOutreachStatus({
+  leadId: "lead-archive-action",
+  lead: { primary_email: "buyer@example.com", ready_to_generate: true },
+  sequence: null,
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { archiveLead: true },
+}).actionConfigured.archiveLead, true);
 
 const legacyNotReadyCanGenerate = deriveOutreachStatus({
   leadId: "dfa83244-018b-4912-8a5e-ef53ad8da8e8",
