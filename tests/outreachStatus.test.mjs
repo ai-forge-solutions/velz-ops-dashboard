@@ -4,6 +4,9 @@ import {
   buildOutreachActionUrl,
   generateOutreachSequence,
   normalizeErrorPayload,
+  setBrandGroupArchived,
+  setLeadArchived,
+  setOutreachSequenceStatus,
 } from "../src/conductorApi.js";
 import {
   deriveOutreachFilters,
@@ -19,6 +22,9 @@ assert.deepEqual(OUTREACH_DEFAULT_ACTION_PATHS, {
   approve: "/outreach/sequences/{sequence_id}/approve",
   reject: "/outreach/sequences/{sequence_id}/reject",
   editDraft: "/outreach/sequences/{sequence_id}/draft-fields",
+  setSequenceStatus: "/outreach/sequences/{sequence_id}/status",
+  archiveLead: "/outreach/leads/{lead_id}/archive",
+  archiveBrandGroup: "/outreach/brand-groups/{group_id}/archive",
   launch: "/outreach/sequences/{sequence_id}/launch-instantly",
 });
 assert.equal(
@@ -41,7 +47,20 @@ assert.equal(
   buildOutreachActionUrl("https://outreach.example.com", "launch", { sequenceId: "seq-1" }),
   "https://outreach.example.com/outreach/sequences/seq-1/launch-instantly",
 );
+assert.equal(
+  buildOutreachActionUrl("https://outreach.example.com", "setSequenceStatus", { sequenceId: "seq-1" }),
+  "https://outreach.example.com/outreach/sequences/seq-1/status",
+);
+assert.equal(
+  buildOutreachActionUrl("https://outreach.example.com", "archiveLead", { leadId: "lead-1" }),
+  "https://outreach.example.com/outreach/leads/lead-1/archive",
+);
+assert.equal(
+  buildOutreachActionUrl("https://outreach.example.com", "archiveBrandGroup", { groupId: "group/1" }),
+  "https://outreach.example.com/outreach/brand-groups/group%2F1/archive",
+);
 assert.throws(() => buildOutreachActionUrl("https://outreach.example.com", "launch", { leadId: qaLeadId }), /sequence_id/);
+assert.throws(() => buildOutreachActionUrl("https://outreach.example.com", "archiveBrandGroup", {}), /group_id/);
 assert.equal(normalizeErrorPayload({ detail: { blocker: "send_kill_switch_enabled" } }, "fallback"), "send_kill_switch_enabled");
 assert.equal(normalizeErrorPayload({ detail: { error: "runtime_configuration_missing", message: "SUPABASE_URL missing" } }, "fallback"), "SUPABASE_URL missing");
 assert.equal(normalizeErrorPayload({ detail: { code: "NO_ENVIABLE", blockers: ["missing recipient email", "active suppression"] } }, "fallback"), "NO_ENVIABLE: missing recipient email · active suppression");
@@ -209,7 +228,34 @@ assert.equal(noEnviableFailedDraft.generateEligible, true);
 assert.deepEqual(noEnviableFailedDraft.generateBlockers, []);
 assert.deepEqual(noEnviableFailedDraft.blockers, []);
 assert.match(noEnviableFailedDraft.warnings.join(" "), /existing sequence/i);
+assert.equal(noEnviableFailedDraft.noEnviable, true);
+assert.equal(noEnviableFailedDraft.canApprove, false);
+assert.equal(noEnviableFailedDraft.launchEligible, false);
+assert.deepEqual(noEnviableFailedDraft.noEnviableReasons, ["falla Entregable: faltan fuentes requeridas ['brand_reviews']", "stage: selector"]);
 assert.equal(noEnviableFailedDraft.nextAction.key, "generate");
+
+const archivedLead = deriveOutreachStatus({
+  leadId: "lead-archived",
+  lead: {
+    primary_email: "archived@example.com",
+    ready_to_generate: true,
+    archived_at: "2026-09-23T12:00:00Z",
+    archived_by: "miguel",
+    archive_reason: "cleanup",
+  },
+  sequence: { ...baseSequence, id: "seq-archived", lead_id: "lead-archived", review_status: "pending_review", status: "draft" },
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { generate: true, approve: true, launch: true },
+});
+assert.equal(archivedLead.archived, true);
+assert.equal(archivedLead.generateEligible, false);
+assert.equal(archivedLead.generateBlockers.includes("lead archived"), true);
+assert.equal(archivedLead.canApprove, false);
+assert.equal(archivedLead.launchEligible, false);
+assert.equal(archivedLead.archive.reason, "cleanup");
 
 const launchReady = deriveOutreachStatus({
   leadId: qaLeadId,
@@ -295,6 +341,20 @@ assert.deepEqual(deriveOutreachFilters(suppressed), ["failed_blocked", "suppress
 
 globalThis.__VELZ_RUNTIME_CONFIG__ = { VITE_OUTREACH_API_BASE_URL: "https://outreach.example.com" };
 const originalFetch = globalThis.fetch;
+const capturedPatchRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  capturedPatchRequests.push({ url: String(url), options });
+  return new Response(JSON.stringify({ ok: true, affected_leads: 7 }), { status: 200, headers: { "Content-Type": "application/json" } });
+};
+await setOutreachSequenceStatus("seq-1", "no_enviable", "manual cleanup");
+await setLeadArchived("lead-1", true, "cleanup");
+await setBrandGroupArchived("group-1", true, "cleanup group");
+assert.deepEqual(capturedPatchRequests.map((request) => [request.url, request.options.method, JSON.parse(request.options.body)]), [
+  ["https://outreach.example.com/outreach/sequences/seq-1/status", "PATCH", { status: "no_enviable", updated_by: "miguel", notes: "manual cleanup" }],
+  ["https://outreach.example.com/outreach/leads/lead-1/archive", "PATCH", { archived: true, updated_by: "miguel", reason: "cleanup" }],
+  ["https://outreach.example.com/outreach/brand-groups/group-1/archive", "PATCH", { archived: true, updated_by: "miguel", reason: "cleanup group", cascade_leads: true }],
+]);
+
 let capturedGenerateUrl = null;
 globalThis.fetch = async (url) => {
   capturedGenerateUrl = String(url);

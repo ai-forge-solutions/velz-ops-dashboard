@@ -115,6 +115,9 @@ const BRAND_GROUP_FIELDS = [
   "description",
   "brand_count",
   "brand_ids",
+  "archived_at",
+  "archived_by",
+  "archive_reason",
   "created_at",
   "updated_at",
 ].join(",");
@@ -420,6 +423,9 @@ function toBrandGroup(row) {
     description: row.description || "",
     brandCount: Number(row.brand_count ?? rawBrandIds.length ?? 0),
     brandIds: rawBrandIds.filter(Boolean).map(String),
+    archivedAt: row.archived_at || null,
+    archivedBy: row.archived_by || null,
+    archiveReason: row.archive_reason || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

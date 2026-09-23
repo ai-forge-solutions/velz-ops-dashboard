@@ -26,6 +26,8 @@ import {
   probeOutreachRuntime,
   rejectOutreachSequence,
   saleshandyQaLaunchConfigured,
+  setLeadArchived,
+  setOutreachSequenceStatus,
 } from "./conductorApi";
 import {
   COLORS,
@@ -144,11 +146,31 @@ function JourneyIndicator({ steps = [] }) {
   );
 }
 
-function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSave }) {
+function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSave, noEnviable = false, noEnviableReasons = [] }) {
   if (!sequence) return <EmptyState>No hay draft de secuencia source-backed para este lead todavía.</EmptyState>;
   const followups = Array.isArray(sequence.followups) ? sequence.followups : [];
   const isEditing = editor.mode === "edit" || editor.mode === "saving";
   const isSaving = editor.mode === "saving";
+
+  if (noEnviable && !isEditing) {
+    return (
+      <div className="space-y-3">
+        <EmptyState tone={COLORS.amber}>
+          Esta secuencia está marcada como No enviable. No se muestra como copy enviable ni puede aprobarse/exportarse; usa Reactivar para volverla a draft si procede.
+        </EmptyState>
+        <div className="rounded-md p-3" style={{ background: COLORS.wash }}>
+          <div className="mb-1 text-[11px] font-medium">Motivo / metadata</div>
+          {noEnviableReasons.length > 0 ? (
+            <ul className="list-disc space-y-1 pl-4" style={{ color: COLORS.muted }}>
+              {noEnviableReasons.map((reason, index) => <li key={`${reason}-${index}`}>{reason}</li>)}
+            </ul>
+          ) : (
+            <p style={{ color: COLORS.muted }}>Sin motivo detallado en metadata.</p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (isEditing) {
     return (
@@ -418,7 +440,9 @@ function OutreachSection({ brand, onRefresh }) {
   const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequenceId);
   const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length && !outreach?.launchBlockers?.length);
   const displayedSequence = sequenceEditor.result?.sequence || sequence;
-  const displayedReviewStatus = displayedSequence?.review_status || outreach?.readiness?.label;
+  const displayedReviewStatus = outreach?.noEnviable ? "No enviable" : displayedSequence?.review_status || outreach?.readiness?.label;
+  const noEnviable = Boolean(outreach?.noEnviable);
+  const leadArchived = Boolean(outreach?.archived);
   // Do not use outreach.actionConfigured.editDraft here: it is captured when
   // Supabase rows load and can be stale if runtime-config arrives afterwards.
   // The diagnostics proved the browser resolves the Outreach URL correctly, so
@@ -490,6 +514,7 @@ function OutreachSection({ brand, onRefresh }) {
         <div className="space-y-4 text-xs">
           <JourneyIndicator steps={outreach.journey} />
           {outreach.suppression && <EmptyState tone={COLORS.red}>Suppression activa: {outreach.suppression.reason || outreach.suppression.type || "sin motivo"}. No enviar.</EmptyState>}
+          {leadArchived && <EmptyState tone={COLORS.red}>Lead archived: oculto por defecto en el dashboard y con CTAs de Outreach desactivadas hasta reactivarlo.</EmptyState>}
           {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
@@ -501,13 +526,31 @@ function OutreachSection({ brand, onRefresh }) {
                   {busyAction === "generate" ? "Generating…" : "Generate"}
                 </button>
                 {displayedSequence && !sequenceIsEditing && (
-                  <button type="button" onClick={() => dispatchSequenceEditor({ type: "edit", sequence: displayedSequence })} disabled={!sequenceEditable.editable} title={sequenceEditable.reason || "Edit sequence draft"} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: sequenceEditable.editable ? COLORS.ink : COLORS.muted }}><Pencil size={13} /> Edit draft</button>
+                  <button type="button" onClick={() => dispatchSequenceEditor({ type: "edit", sequence: displayedSequence })} disabled={!sequenceEditable.editable || noEnviable} title={noEnviable ? "No editable mientras está marcado No enviable; reactiva a draft primero." : sequenceEditable.reason || "Edit sequence draft"} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: sequenceEditable.editable && !noEnviable ? COLORS.ink : COLORS.muted }}><Pencil size={13} /> Edit draft</button>
+                )}
+                {sequenceId && !noEnviable && (
+                  <button type="button" onClick={() => runAction("no_enviable", () => setOutreachSequenceStatus(sequenceId, "no_enviable", "Marked no_enviable from Velz Ops Dashboard."))} disabled={busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.amber}`, color: COLORS.amber }}>
+                    {busyAction === "no_enviable" ? "Marcando…" : "Marcar no enviable"}
+                  </button>
+                )}
+                {sequenceId && noEnviable && (
+                  <button type="button" onClick={() => runAction("reactivate", () => setOutreachSequenceStatus(sequenceId, "draft", "Reactivated to draft from Velz Ops Dashboard."))} disabled={busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: COLORS.ink, color: "#fff" }}>
+                    {busyAction === "reactivate" ? "Reactivando…" : "Reactivar / volver a draft"}
+                  </button>
                 )}
               </div>
             </div>
             {!actionConfigured.generate && <EmptyState>Generate disabled: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/leads/{'{lead_id}'}/sequences/generate.</EmptyState>}
             {actionConfigured.generate && !outreach.readyToGenerate && !outreach.generateBlockers?.length && <EmptyState tone={COLORS.amber}>Generate enabled with readiness warning: lead is not ready_to_generate; backend generator will make the final decision.</EmptyState>}
-            <SequencePreview sequence={displayedSequence} editor={sequenceEditor} dispatchEditor={dispatchSequenceEditor} editableState={sequenceEditable} onSave={saveSequenceDraft} />
+            <SequencePreview
+              sequence={displayedSequence}
+              editor={sequenceEditor}
+              dispatchEditor={dispatchSequenceEditor}
+              editableState={sequenceEditable}
+              onSave={saveSequenceDraft}
+              noEnviable={noEnviable}
+              noEnviableReasons={outreach.noEnviableReasons || []}
+            />
             {!sequenceEditable.editable && <div className="mt-3"><OutreachDiagnostics diagnostics={diagnostics} probe={probeResult} busy={probeBusy} onProbe={runOutreachProbe} /></div>}
             <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
               <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
@@ -519,6 +562,34 @@ function OutreachSection({ brand, onRefresh }) {
               </button>
             </div>
             <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Approval only changes backend review state for sequence_id; it does not send email. Approve/reject controls stay disabled when VITE_OUTREACH_API_BASE_URL is missing, no sequence_id exists, or backend readiness blocks review.</p>
+          </section>
+
+          <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h4 className="font-medium">Lead archive</h4>
+                <p className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>
+                  Archivar oculta el lead de la operativa normal y bloquea Generate/Approve/Export en UI; el backend conserva el bloqueo real.
+                </p>
+              </div>
+              <OutreachPill tone={leadArchived ? COLORS.red : COLORS.green}>{leadArchived ? "Archived" : "Active"}</OutreachPill>
+            </div>
+            <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <KeyValue label="archived_at" value={fmtTime(outreach.archive?.archivedAt)} />
+              <KeyValue label="reason" value={outreach.archive?.reason || "—"} />
+              <KeyValue label="source" value={outreach.archive?.source || "—"} />
+              <KeyValue label="source_id" value={outreach.archive?.sourceId || "—"} />
+            </dl>
+            <button
+              type="button"
+              onClick={() => runAction("archiveLead", () => setLeadArchived(outreach.leadId, !leadArchived, leadArchived ? "Unarchived from Velz Ops Dashboard." : "Archived from Velz Ops Dashboard."))}
+              disabled={!actionConfigured.archiveLead || !outreach.leadId || busyAction}
+              className="mt-3 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45"
+              style={{ border: `1px solid ${leadArchived ? COLORS.green : COLORS.red}`, color: leadArchived ? COLORS.green : COLORS.red }}
+            >
+              {busyAction === "archiveLead" ? "Guardando…" : leadArchived ? "Unarchive lead" : "Archive lead"}
+            </button>
+            {!actionConfigured.archiveLead && <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Archive lead disabled: falta VITE_OUTREACH_API_BASE_URL.</p>}
           </section>
 
           <KeyValueList title="Readiness checks" values={[

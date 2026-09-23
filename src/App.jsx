@@ -16,6 +16,7 @@ import {
   runConductorPipeline,
   runConductorService,
   runProcess,
+  setBrandGroupArchived,
 } from "./conductorApi";
 import { sequenceIdFor } from "./sequenceDraftEditor";
 import BrandDrawer from "./BrandDrawer";
@@ -106,6 +107,7 @@ export function outreachServiceAvailability(brand, service) {
   if (service.action === "generate") {
     if (!outreachActionConfigured("generate")) return { available: false, message: "Drafting no configurado: falta VITE_OUTREACH_API_BASE_URL." };
     if (!outreach.leadId) return { available: false, message: "Drafting requiere lead_id." };
+    if (outreach.archived) return { available: false, message: "Drafting bloqueado: lead archived." };
     if (outreach.generateBlockers?.length) return { available: false, message: `Drafting bloqueado por condición dura: ${outreach.generateBlockers.join(" · ")}` };
     return { available: true, message: outreach.warnings?.length ? `Aviso readiness no bloqueante: ${outreach.warnings.join(" · ")}` : null };
   }
@@ -116,6 +118,7 @@ export function outreachServiceAvailability(brand, service) {
     const sequenceId = sequenceIdFor(outreach.sequence);
     if (!outreachActionConfigured("launch")) return { available: false, message: "Export no configurado: falta VITE_OUTREACH_API_BASE_URL." };
     if (!sequenceId) return { available: false, message: "Export requiere sequence_id." };
+    if (outreach.noEnviable) return { available: false, message: "Export bloqueado: sequence status no_enviable." };
     if (!outreach.launchEligible) return { available: false, message: "Export bloqueado: el read model todavía no marca launch-ready." };
     if (outreach.launchBlockers?.length) return { available: false, message: `Export bloqueado: ${outreach.launchBlockers.join(" · ")}` };
     return { available: true };
@@ -217,6 +220,8 @@ function OutreachStatusCell({ outreach, error }) {
   const tone = outreachTone(outreach);
   return (
     <div className="flex flex-col items-start gap-1">
+      {outreach.archived && <OutreachBadge value="Archived" tone="red" />}
+      {outreach.noEnviable && <OutreachBadge value="No enviable" tone="amber" />}
       <OutreachBadge value={outreach.readiness?.label} tone={tone} />
       <OutreachBadge value={outreach.lifecycle?.label} tone={tone} />
       <OutreachJourneyMini steps={outreach.journey} />
@@ -253,7 +258,7 @@ function sequenceInitialBody(sequence) {
 }
 
 function selectedSequenceBrands(brands, selected) {
-  return brands.filter((brand) => selected.has(brand.id) && brand.outreach?.sequence);
+  return brands.filter((brand) => selected.has(brand.id) && brand.outreach?.sequence && !brand.outreach?.noEnviable && !brand.outreach?.archived);
 }
 
 export function buildSequenceExportDocument(brands, format = "md") {
@@ -295,6 +300,14 @@ function downloadTextFile(filename, text, format) {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+function brandLeadArchived(brand) {
+  return Boolean(brand?.outreach?.archived || brand?.outreach?.lead?.archived_at || brand?.outreach?.lead?.archivedAt);
+}
+
+function groupArchived(group) {
+  return Boolean(group?.archivedAt || group?.archived_at);
 }
 
 function outreachWithGeneratedSequence(outreach, sequence) {
@@ -342,6 +355,7 @@ export default function App() {
   const [loadingBrands, setLoadingBrands] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [search, setSearch] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [popover, setPopover] = useState(null); // {brandId, serviceKey}
@@ -572,13 +586,15 @@ export default function App() {
     }
   }
 
-  const activeGroup = brandGroups.find((group) => group.id === activeGroupId) || null;
+  const visibleBrandGroups = showArchived ? brandGroups : brandGroups.filter((group) => !groupArchived(group));
+  const activeGroup = visibleBrandGroups.find((group) => group.id === activeGroupId) || null;
   const activeGroupBrandIds = new Set(activeGroup?.brandIds || []);
   const filtered = brands.filter((b) => {
     const matchesSearch = b.name.toLowerCase().includes(search.toLowerCase()) ||
       b.domain.toLowerCase().includes(search.toLowerCase());
     const matchesGroup = !activeGroup || activeGroupBrandIds.has(b.id);
-    return matchesSearch && matchesGroup;
+    const matchesArchived = showArchived || !brandLeadArchived(b);
+    return matchesSearch && matchesGroup && matchesArchived;
   });
 
   function selectVisibleBrands() {
@@ -651,6 +667,25 @@ export default function App() {
     }
   }
 
+  async function handleArchiveActiveGroup() {
+    if (!activeGroup) return;
+    const archived = groupArchived(activeGroup);
+    const verb = archived ? "desarchivar" : "archivar";
+    const copy = archived
+      ? `¿Desarchivar el grupo “${activeGroup.name}”? El backend solo desarchiva leads que fueron archivados por este grupo; no tocará leads archivados manualmente después o desde otros flujos.`
+      : `¿Archivar el grupo “${activeGroup.name}”? El backend archivará sus leads miembro individualmente y los ocultará de la operativa normal.`;
+    if (!window.confirm(copy)) return;
+    try {
+      const result = await setBrandGroupArchived(activeGroup.id, !archived, archived ? "Unarchived group from Velz Ops Dashboard." : "Archived group from Velz Ops Dashboard.");
+      await refreshDashboardBrands({ showLoading: true });
+      if (!archived) setActiveGroupId("");
+      const affected = result?.affected_leads ?? result?.lead_count ?? result?.updated_leads ?? result?.archived_leads ?? result?.unarchived_leads;
+      setActionMessage({ tone: "success", text: `Grupo “${activeGroup.name}” ${archived ? "desarchivado" : "archivado"}${affected != null ? ` · ${affected} leads afectados` : ""}.` });
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `No se pudo ${verb} el grupo: ${error.message}` });
+    }
+  }
+
   function toggleRow(id) {
     setSelected(prev => {
       const next = new Set(prev);
@@ -700,7 +735,9 @@ export default function App() {
           triggerService={triggerService} triggerPipeline={triggerPipeline} triggerBulk={triggerBulk}
           popover={popover} setPopover={setPopover} popRef={popRef}
           openBrandDrawer={setDrawerBrand}
-          brandGroups={brandGroups}
+          brandGroups={visibleBrandGroups}
+          showArchived={showArchived}
+          setShowArchived={setShowArchived}
           activeGroupId={activeGroupId}
           setActiveGroupId={setActiveGroupId}
           groupName={groupName}
@@ -708,16 +745,17 @@ export default function App() {
           onCreateGroup={handleCreateGroup}
           onUpdateGroup={handleUpdateActiveGroup}
           onDeleteGroup={handleDeleteActiveGroup}
+          onArchiveGroup={handleArchiveActiveGroup}
           onSelectVisible={selectVisibleBrands}
           onClearSelection={clearSelection}
           onExportSequences={exportSelectedSequences}
         />
       ) : tab === "outreach" ? (
-        <OutreachView brands={filtered} loading={loadingBrands} error={loadError} openBrandDrawer={setDrawerBrand} />
+        <OutreachView brands={filtered} loading={loadingBrands} error={loadError} openBrandDrawer={setDrawerBrand} showArchived={showArchived} setShowArchived={setShowArchived} />
       ) : (
         <ProcessesView
           brands={brands} selected={selected}
-          brandGroups={brandGroups}
+          brandGroups={visibleBrandGroups}
           actionMessage={actionMessage}
           setActionMessage={setActionMessage}
           clearActionMessage={() => setActionMessage(null)}
@@ -739,7 +777,7 @@ export default function App() {
 }
 
 // ---------------------------------------------------------------------------
-function RunsView({ brands, search, setSearch, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer, brandGroups, activeGroupId, setActiveGroupId, groupName, setGroupName, onCreateGroup, onUpdateGroup, onDeleteGroup, onSelectVisible, onClearSelection, onExportSequences }) {
+function RunsView({ brands, search, setSearch, showArchived, setShowArchived, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer, brandGroups, activeGroupId, setActiveGroupId, groupName, setGroupName, onCreateGroup, onUpdateGroup, onDeleteGroup, onArchiveGroup, onSelectVisible, onClearSelection, onExportSequences }) {
   const activeGroup = brandGroups.find((group) => group.id === activeGroupId) || null;
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
@@ -753,10 +791,14 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <label className="flex items-center gap-2 rounded-md px-3 py-2 sm:py-1.5" style={{ border: `1px solid ${COLORS.line}` }}>
+            <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+            <span>Mostrar archivados</span>
+          </label>
+          <label className="flex items-center gap-2 rounded-md px-3 py-2 sm:py-1.5" style={{ border: `1px solid ${COLORS.line}` }}>
             <span style={{ color: COLORS.muted }}>Grupo:</span>
             <select value={activeGroupId} onChange={(event) => setActiveGroupId(event.target.value)} className="bg-transparent outline-none">
               <option value="">Todos</option>
-              {brandGroups.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.brandCount})</option>)}
+              {brandGroups.map((group) => <option key={group.id} value={group.id}>{group.name}{groupArchived(group) ? " · archived" : ""} ({group.brandCount})</option>)}
             </select>
           </label>
           <button type="button" onClick={onSelectVisible} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
@@ -773,6 +815,11 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
           <button type="button" onClick={onCreateGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ background: COLORS.ink, color: "#fff" }}>
             <Plus size={11} /> Crear grupo
           </button>
+          {activeGroup && (
+            <button type="button" onClick={onArchiveGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${groupArchived(activeGroup) ? COLORS.green : COLORS.amber}`, color: groupArchived(activeGroup) ? COLORS.green : COLORS.amber }}>
+              {groupArchived(activeGroup) ? "Desarchivar grupo" : "Archivar grupo"}
+            </button>
+          )}
           {activeGroup && (
             <button type="button" onClick={onDeleteGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
               <Trash2 size={11} /> Borrar grupo
@@ -873,7 +920,10 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
                     className="group text-left"
                     title="Abrir panel de verificación de marca"
                   >
-                    <div className="font-medium underline-offset-2 group-hover:underline">{b.name}</div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-medium underline-offset-2 group-hover:underline">{b.name}</span>
+                      {brandLeadArchived(b) && <OutreachBadge value="Archived" tone="red" />}
+                    </div>
                     <div className="mono text-[11px]" style={{ color: COLORS.muted }}>{b.domain}</div>
                   </button>
                 </td>
@@ -960,7 +1010,10 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
           Sel.
         </label>
         <button type="button" onClick={() => openBrandDrawer(brand)} className="min-w-0 flex-1 text-left" title="Abrir panel de verificación de marca">
-          <div className="truncate font-medium underline-offset-2 hover:underline">{brand.name}</div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="truncate font-medium underline-offset-2 hover:underline">{brand.name}</span>
+            {brandLeadArchived(brand) && <OutreachBadge value="Archived" tone="red" />}
+          </div>
           <div className="mono truncate text-[11px]" style={{ color: COLORS.muted }}>{brand.domain}</div>
         </button>
         <div className="shrink-0 text-right mono text-[11px]">
@@ -1114,13 +1167,17 @@ const OUTREACH_FILTERS = [
   { key: "suppressed", label: "Suppressed" },
 ];
 
-function OutreachView({ brands, loading, error, openBrandDrawer }) {
+function OutreachView({ brands, loading, error, openBrandDrawer, showArchived, setShowArchived }) {
   const [filter, setFilter] = useState("all");
   const rows = brands.filter((brand) => filter === "all" || deriveOutreachFilters(brand.outreach).includes(filter));
 
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
-      <div className="mb-4 flex flex-wrap gap-2 text-xs">
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+        <label className="flex items-center gap-2 rounded-full px-3 py-1 font-medium" style={{ border: `1px solid ${COLORS.line}` }}>
+          <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+          <span>Mostrar archivados</span>
+        </label>
         {OUTREACH_FILTERS.map((item) => (
           <button key={item.key} onClick={() => setFilter(item.key)} className="rounded-full px-3 py-1 font-medium" style={{ background: filter === item.key ? COLORS.ink : COLORS.soft, color: filter === item.key ? "#fff" : COLORS.ink }}>
             {item.label}
@@ -1148,7 +1205,11 @@ function OutreachView({ brands, loading, error, openBrandDrawer }) {
                 <tr key={brand.id} style={{ borderBottom: `1px solid ${COLORS.line}` }}>
                   <td className="px-3 py-3 align-top">
                     <button onClick={() => openBrandDrawer(brand)} className="text-left underline-offset-2 hover:underline">
-                      <div className="font-medium">{brand.name}</div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="font-medium">{brand.name}</span>
+                        {outreach?.archived && <OutreachBadge value="Archived" tone="red" />}
+                        {outreach?.noEnviable && <OutreachBadge value="No enviable" tone="amber" />}
+                      </div>
                       <div className="mono text-[11px]" style={{ color: COLORS.muted }}>{outreach?.leadId || "sin lead"} · {outreach?.email || brand.domain}</div>
                     </button>
                   </td>
