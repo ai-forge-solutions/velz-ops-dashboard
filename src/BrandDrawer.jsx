@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -190,9 +190,6 @@ function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSa
 
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
-        <button type="button" onClick={() => dispatchEditor({ type: "edit", sequence })} disabled={!editableState.editable} title={editableState.reason || "Edit sequence draft"} className="inline-flex items-center gap-1 rounded px-2.5 py-1.5 text-[11px] font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: editableState.editable ? COLORS.ink : COLORS.muted }}><Pencil size={12} /> Edit draft</button>
-      </div>
       {!editableState.editable && <EmptyState>{editableState.reason}</EmptyState>}
       {editor.result?.sequence?.review_status === "pending_review" && <EmptyState tone={COLORS.amber}>Saved. Review is pending again before approval/launch.</EmptyState>}
       <div className="rounded-md p-3" style={{ background: COLORS.wash }}>
@@ -420,6 +417,9 @@ function OutreachSection({ brand, onRefresh }) {
   const events = Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const magnetEvents = Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}: ${count}`).join(" · ");
   const canGenerate = Boolean(outreach?.generateEligible && actionConfigured.generate && !busyAction);
+  const generateBlockedTitle = outreach?.generateBlockers?.length
+    ? `Generate blocked by hard blockers: ${outreach.generateBlockers.join(" · ")}`
+    : undefined;
   const canApprove = Boolean(outreach?.canApprove && actionConfigured.approve && sequenceId && !outreach?.blockers?.length);
   const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequenceId);
   const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length && !outreach?.launchBlockers?.length);
@@ -432,6 +432,7 @@ function OutreachSection({ brand, onRefresh }) {
   const liveDiagnostics = outreachRuntimeDiagnostics();
   const editConfigured = Boolean(liveDiagnostics.editDraftConfigured);
   const sequenceEditable = isSequenceDraftEditable({ sequence: displayedSequence, configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
+  const sequenceIsEditing = sequenceEditor.mode === "edit" || sequenceEditor.mode === "saving";
 
   useEffect(() => {
     dispatchSequenceEditor({ type: "cancel", sequence });
@@ -488,17 +489,6 @@ function OutreachSection({ brand, onRefresh }) {
 
   return (
     <section className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-medium">Outreach</h3>
-          <p className="mt-1 text-[11px]" style={{ color: COLORS.muted }}>Readiness → Generate sequence → Review/Approve → Launch Saleshandy → Engagement. Generate calls backend by lead_id; approve/reject/launch call backend by sequence_id.</p>
-        </div>
-        <div className="flex flex-col items-end gap-1">
-          <OutreachPill tone={tone}>{outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "Not ready")}</OutreachPill>
-          <OutreachPill tone={tone}>{outreach?.lifecycle?.label || "Not launched"}</OutreachPill>
-        </div>
-      </div>
-
       {brand.outreachLoadError && <EmptyState tone={COLORS.amber}>No se pudieron leer las tablas Outreach con la anon key actual: {brand.outreachLoadError.message}</EmptyState>}
       {!brand.outreachLoadError && !outreach && <EmptyState>No hay lead/outreach asociado a esta marca.</EmptyState>}
 
@@ -507,8 +497,35 @@ function OutreachSection({ brand, onRefresh }) {
           <JourneyIndicator steps={outreach.journey} />
           {outreach.suppression && <EmptyState tone={COLORS.red}>Suppression activa: {outreach.suppression.reason || outreach.suppression.type || "sin motivo"}. No enviar.</EmptyState>}
           {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
-          {outreach.warnings?.length > 0 && <EmptyState tone={COLORS.amber}>Avisos no bloqueantes: {outreach.warnings.join(" · ")}</EmptyState>}
-          <EmptyState tone={outreach.blockers?.length ? COLORS.amber : COLORS.green}>Siguiente acción: {outreach.nextAction?.label}</EmptyState>
+
+          <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h4 className="font-medium">Sequence draft / review</h4>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <OutreachPill tone={tone}>{displayedReviewStatus}</OutreachPill>
+                <button onClick={() => runAction("generate", () => generateOutreachSequence(outreach.leadId))} disabled={!canGenerate || busyAction} title={generateBlockedTitle} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canGenerate ? COLORS.ink : COLORS.line, color: canGenerate ? "#fff" : COLORS.muted }}>
+                  {busyAction === "generate" ? "Generating…" : "Generate"}
+                </button>
+                {displayedSequence && !sequenceIsEditing && (
+                  <button type="button" onClick={() => dispatchSequenceEditor({ type: "edit", sequence: displayedSequence })} disabled={!sequenceEditable.editable} title={sequenceEditable.reason || "Edit sequence draft"} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: sequenceEditable.editable ? COLORS.ink : COLORS.muted }}><Pencil size={13} /> Edit draft</button>
+                )}
+              </div>
+            </div>
+            {!actionConfigured.generate && <EmptyState>Generate disabled: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/leads/{'{lead_id}'}/sequences/generate.</EmptyState>}
+            {actionConfigured.generate && !outreach.readyToGenerate && !outreach.generateBlockers?.length && <EmptyState tone={COLORS.amber}>Generate enabled with readiness warning: lead is not ready_to_generate; backend generator will make the final decision.</EmptyState>}
+            <SequencePreview sequence={displayedSequence} editor={sequenceEditor} dispatchEditor={dispatchSequenceEditor} editableState={sequenceEditable} onSave={saveSequenceDraft} />
+            {!sequenceEditable.editable && <div className="mt-3"><OutreachDiagnostics diagnostics={diagnostics} probe={probeResult} busy={probeBusy} onProbe={runOutreachProbe} /></div>}
+            <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+              <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
+              <button onClick={() => runAction("reject", () => rejectOutreachSequence(sequenceId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
+                {busyAction === "reject" ? "Rejecting…" : "Reject / needs changes"}
+              </button>
+              <button onClick={() => runAction("approve", () => approveOutreachSequence(sequenceId))} disabled={!canApprove || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canApprove ? COLORS.green : COLORS.line, color: canApprove ? "#fff" : COLORS.muted }}>
+                {busyAction === "approve" ? "Approving…" : "Approve sequence"}
+              </button>
+            </div>
+            <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Approval only changes backend review state for sequence_id; it does not send email. Approve/reject controls stay disabled when VITE_OUTREACH_API_BASE_URL is missing, no sequence_id exists, or backend readiness blocks review.</p>
+          </section>
 
           <KeyValueList title="Readiness checks" values={[
             ["recipient", outreach.email],
@@ -523,38 +540,6 @@ function OutreachSection({ brand, onRefresh }) {
           ]} />
 
           <LeadMagnetToolSelector outreach={outreach} onRefresh={onRefresh} />
-
-          <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h4 className="font-medium">Generate sequence</h4>
-              <button onClick={() => runAction("generate", () => generateOutreachSequence(outreach.leadId))} disabled={!canGenerate || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canGenerate ? COLORS.ink : COLORS.line, color: canGenerate ? "#fff" : COLORS.muted }}>
-                {busyAction === "generate" ? "Generating…" : "Generate sequence"}
-              </button>
-            </div>
-            {!actionConfigured.generate && <EmptyState>Generate disabled: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/leads/{'{lead_id}'}/sequences/generate.</EmptyState>}
-            {actionConfigured.generate && !outreach.readyToGenerate && !outreach.generateBlockers?.length && <EmptyState tone={COLORS.amber}>Generate enabled with readiness warning: lead is not ready_to_generate; backend generator will make the final decision.</EmptyState>}
-            {outreach.warnings?.length > 0 && <EmptyState tone={COLORS.amber}>Generate readiness warnings (non-blocking): {outreach.warnings.join(" · ")}</EmptyState>}
-            {outreach.generateBlockers?.length > 0 && <EmptyState tone={COLORS.red}>Generate blocked by hard blockers: {outreach.generateBlockers.join(" · ")}</EmptyState>}
-          </section>
-
-          <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h4 className="font-medium">Sequence draft / review</h4>
-              <OutreachPill tone={tone}>{displayedReviewStatus}</OutreachPill>
-            </div>
-            <SequencePreview sequence={displayedSequence} editor={sequenceEditor} dispatchEditor={dispatchSequenceEditor} editableState={sequenceEditable} onSave={saveSequenceDraft} />
-            {!sequenceEditable.editable && <div className="mt-3"><OutreachDiagnostics diagnostics={diagnostics} probe={probeResult} busy={probeBusy} onProbe={runOutreachProbe} /></div>}
-            <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
-              <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
-              <button onClick={() => runAction("reject", () => rejectOutreachSequence(sequenceId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
-                {busyAction === "reject" ? "Rejecting…" : "Reject / needs changes"}
-              </button>
-              <button onClick={() => runAction("approve", () => approveOutreachSequence(sequenceId))} disabled={!canApprove || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canApprove ? COLORS.green : COLORS.line, color: canApprove ? "#fff" : COLORS.muted }}>
-                {busyAction === "approve" ? "Approving…" : "Approve sequence"}
-              </button>
-            </div>
-            <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Approval only changes backend review state for sequence_id; it does not send email. Approve/reject controls stay disabled when VITE_OUTREACH_API_BASE_URL is missing, no sequence_id exists, or backend readiness blocks review.</p>
-          </section>
 
           <KeyValueList title="Saleshandy / provider lifecycle" values={[
             ["sequence status", sequence?.status || sequence?.readiness_status],
@@ -1060,16 +1045,25 @@ function DetailPane({ brand, source, state, fullscreen, onBack }) {
   );
 }
 
-export default function BrandDrawer({ brand, onClose, onRefresh }) {
+export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand, onClose, onRefresh }) {
   const [fullscreen, setFullscreen] = useState(false);
   const [detailSource, setDetailSource] = useState(null);
   const [sources, setSources] = useState({});
+  const previousBrandIdRef = useRef(null);
 
   const runnableServices = useMemo(() => VERIFICATION_SERVICES, []);
 
   useEffect(() => {
-    if (!brand) return undefined;
-    setFullscreen(false);
+    if (!brand) {
+      previousBrandIdRef.current = null;
+      setFullscreen(false);
+      setDetailSource(null);
+      setSources({});
+      return undefined;
+    }
+    const openingDrawer = previousBrandIdRef.current == null;
+    previousBrandIdRef.current = brand.id;
+    if (openingDrawer) setFullscreen(false);
     setDetailSource(null);
     const services = VERIFICATION_SERVICES.filter((service) => brand.runs?.[service.key]);
     const initial = Object.fromEntries(services.map((service) => [service.source, { loading: true, data: null, error: null }]));
@@ -1101,8 +1095,13 @@ export default function BrandDrawer({ brand, onClose, onRefresh }) {
 
   if (!brand) return null;
 
+  const headerTone = outreachTone(brand.outreach);
   const hasRuns = runnableServices.length > 0;
   const width = fullscreen ? "100vw" : undefined;
+  const navigationIndex = brandUniverse.findIndex((item) => item.id === brand.id);
+  const canNavigateBrands = Boolean(onNavigateBrand && navigationIndex >= 0 && brandUniverse.length > 1);
+  const previousBrand = canNavigateBrands ? brandUniverse[(navigationIndex - 1 + brandUniverse.length) % brandUniverse.length] : null;
+  const nextBrand = canNavigateBrands ? brandUniverse[(navigationIndex + 1) % brandUniverse.length] : null;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/20" aria-modal="true" role="dialog">
@@ -1110,8 +1109,23 @@ export default function BrandDrawer({ brand, onClose, onRefresh }) {
         <header className="sticky top-0 z-10 flex items-start justify-between gap-3 px-4 py-4 sm:gap-4 sm:px-6" style={{ borderBottom: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em]" style={{ color: COLORS.muted }}>Verificación de marca</p>
-            <h1 className="mt-1 text-xl font-medium">{brand.name}</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-medium">{brand.name}</h1>
+              <OutreachPill tone={headerTone}>{brand.outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "Not ready")}</OutreachPill>
+              <OutreachPill tone={headerTone}>{brand.outreach?.lifecycle?.label || "Not launched"}</OutreachPill>
+            </div>
             <p className="mono text-[11px]" style={{ color: COLORS.muted }}>{brand.domain}</p>
+            {canNavigateBrands && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                <button type="button" onClick={() => onNavigateBrand(previousBrand)} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}>
+                  ← Anterior
+                </button>
+                <span className="mono text-[10px]" style={{ color: COLORS.muted }}>{navigationIndex + 1}/{brandUniverse.length}</span>
+                <button type="button" onClick={() => onNavigateBrand(nextBrand)} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}>
+                  Siguiente →
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setFullscreen((value) => !value)} className="rounded-full p-2" style={{ border: `1px solid ${COLORS.line}` }} title={fullscreen ? "Restaurar panel" : "Pantalla completa"}>

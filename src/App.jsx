@@ -655,6 +655,8 @@ export default function App() {
 
       <BrandDrawer
         brand={drawerBrand}
+        brandUniverse={filtered}
+        onNavigateBrand={setDrawerBrand}
         onClose={() => setDrawerBrand(null)}
         onRefresh={async () => {
           const rows = await refreshDashboardBrands();
@@ -701,14 +703,9 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
             <Plus size={11} /> Crear grupo
           </button>
           {activeGroup && (
-            <>
-              <button type="button" onClick={onUpdateGroup} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
-                Actualizar grupo
-              </button>
-              <button type="button" onClick={onDeleteGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
-                <Trash2 size={11} /> Borrar grupo
-              </button>
-            </>
+            <button type="button" onClick={onDeleteGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
+              <Trash2 size={11} /> Borrar grupo
+            </button>
           )}
         </div>
         {selected.size > 0 && (
@@ -1040,20 +1037,19 @@ function OutreachView({ brands, loading, error, openBrandDrawer }) {
         ))}
       </div>
       <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${COLORS.line}` }}>
-        <table className="w-full min-w-[900px] text-xs">
+        <table className="w-full min-w-[800px] text-xs">
           <thead>
             <tr style={{ background: "#FAFAF8", borderBottom: `1px solid ${COLORS.line}` }}>
               <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Marca / lead</th>
               <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Readiness</th>
               <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Lifecycle</th>
               <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Provider / engagement</th>
-              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Next action</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}><Loader2 size={14} className="mr-2 inline animate-spin" /> Cargando Outreach desde Supabase…</td></tr>}
-            {!loading && error && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>No se pudieron leer marcas: {error.message}</td></tr>}
-            {!loading && !error && rows.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>No hay leads para este filtro.</td></tr>}
+            {loading && <tr><td colSpan={4} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}><Loader2 size={14} className="mr-2 inline animate-spin" /> Cargando Outreach desde Supabase…</td></tr>}
+            {!loading && error && <tr><td colSpan={4} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>No se pudieron leer marcas: {error.message}</td></tr>}
+            {!loading && !error && rows.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>No hay leads para este filtro.</td></tr>}
             {!loading && !error && rows.map((brand) => {
               const outreach = brand.outreach;
               const tone = outreachTone(outreach);
@@ -1077,9 +1073,6 @@ function OutreachView({ brands, loading, error, openBrandDrawer }) {
                     <div>import: {outreach?.provider?.provider_import_status || outreach?.provider?.provider_import_request_id || "—"}</div>
                     <div>events: {Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}:${count}`).join(" · ") || "—"}</div>
                     <div>tool: {Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}:${count}`).join(" · ") || "—"}</div>
-                  </td>
-                  <td className="px-3 py-3 align-top" style={{ color: outreach?.blockers?.length ? COLORS.red : COLORS.ink }}>
-                    {brand.outreachLoadError ? `Supabase read blocked: ${brand.outreachLoadError.message}` : outreach?.nextAction?.label || "No outreach data"}
                   </td>
                 </tr>
               );

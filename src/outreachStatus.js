@@ -119,7 +119,8 @@ function isNoEnviableFailedDraft(sequence) {
 
 function isReadinessWarning(value) {
   const message = normalizedMessage(value);
-  return isMissingToolUrl(message) || [
+  if (isMissingToolUrl(message)) return false;
+  return [
     "not ready",
     "not ready to generate",
     "ready to generate false",
@@ -291,15 +292,13 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
   if (Array.isArray(backendBlockers)) {
     for (const blocker of backendBlockers) {
       const message = typeof blocker === "string" ? blocker : blocker?.message || blocker?.reason || JSON.stringify(blocker);
+      if (isMissingToolUrl(message)) continue;
       if (failedDraft && normalizedMessage(message).includes("existing sequence")) pushUnique(warnings, message);
       else if (isReadinessWarning(message) && !isGenerateHardBlocker(message)) pushUnique(warnings, message);
       else pushUnique(blockers, message);
     }
   }
   if (!email) pushUnique(blockers, "missing recipient email");
-  if (sequence && !toolUrl) {
-    pushUnique(warnings, "missing tool URL — ok for copy review and current no-link launch strategy");
-  }
   const sendStatus = normalize(send?.status || send?.send_status);
   const providerImportStatus = normalize(send?.provider_import_status || send?.import_status);
   if ([sendStatus, providerImportStatus].some((value) => ["failed", "error", "bounced", "rejected"].includes(value))) blockers.push("provider/send failure");

@@ -170,6 +170,7 @@ describe("Brand group MVP", () => {
 
     expect(screen.getAllByText("OcCre").length).toBeGreaterThan(0);
     expect(screen.queryByText("Velz Test Store")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Actualizar grupo/i })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /Seleccionar visibles/i }));
     const table = screen.getByRole("table");
