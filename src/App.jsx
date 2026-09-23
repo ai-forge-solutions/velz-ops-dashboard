@@ -655,6 +655,8 @@ export default function App() {
 
       <BrandDrawer
         brand={drawerBrand}
+        brandUniverse={filtered}
+        onNavigateBrand={setDrawerBrand}
         onClose={() => setDrawerBrand(null)}
         onRefresh={async () => {
           const rows = await refreshDashboardBrands();
@@ -701,14 +703,9 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
             <Plus size={11} /> Crear grupo
           </button>
           {activeGroup && (
-            <>
-              <button type="button" onClick={onUpdateGroup} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
-                Actualizar grupo
-              </button>
-              <button type="button" onClick={onDeleteGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
-                <Trash2 size={11} /> Borrar grupo
-              </button>
-            </>
+            <button type="button" onClick={onDeleteGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
+              <Trash2 size={11} /> Borrar grupo
+            </button>
           )}
         </div>
         {selected.size > 0 && (

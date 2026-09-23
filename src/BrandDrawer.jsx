@@ -510,38 +510,20 @@ function OutreachSection({ brand, onRefresh }) {
           {outreach.warnings?.length > 0 && <EmptyState tone={COLORS.amber}>Avisos no bloqueantes: {outreach.warnings.join(" · ")}</EmptyState>}
           <EmptyState tone={outreach.blockers?.length ? COLORS.amber : COLORS.green}>Siguiente acción: {outreach.nextAction?.label}</EmptyState>
 
-          <KeyValueList title="Readiness checks" values={[
-            ["recipient", outreach.email],
-            ["lead_id", outreach.leadId],
-            ["sequence_id", sequenceId],
-            ["tool_key", outreach.lead?.toolAssignment?.assigned_tool_key || sequence?.tool_key || outreach.lead?.tool_key],
-            ["resolved tool", outreach.lead?.toolAssignment?.resolved_tool_key],
-            ["public tool URL", outreach.toolUrl, outreach.toolUrl],
-            ["ready_to_generate", outreach.readyToGenerate ? "true" : "false"],
-            ["blockers", outreach.blockers?.join(" · ") || "—"],
-            ["warnings", outreach.warnings?.join(" · ") || "—"],
-          ]} />
-
-          <LeadMagnetToolSelector outreach={outreach} onRefresh={onRefresh} />
-
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h4 className="font-medium">Generate sequence</h4>
-              <button onClick={() => runAction("generate", () => generateOutreachSequence(outreach.leadId))} disabled={!canGenerate || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canGenerate ? COLORS.ink : COLORS.line, color: canGenerate ? "#fff" : COLORS.muted }}>
-                {busyAction === "generate" ? "Generating…" : "Generate sequence"}
-              </button>
+              <h4 className="font-medium">Sequence draft / review</h4>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <OutreachPill tone={tone}>{displayedReviewStatus}</OutreachPill>
+                <button onClick={() => runAction("generate", () => generateOutreachSequence(outreach.leadId))} disabled={!canGenerate || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canGenerate ? COLORS.ink : COLORS.line, color: canGenerate ? "#fff" : COLORS.muted }}>
+                  {busyAction === "generate" ? "Generating…" : "Generate"}
+                </button>
+              </div>
             </div>
             {!actionConfigured.generate && <EmptyState>Generate disabled: falta VITE_OUTREACH_API_BASE_URL. La ruta default real es /outreach/leads/{'{lead_id}'}/sequences/generate.</EmptyState>}
             {actionConfigured.generate && !outreach.readyToGenerate && !outreach.generateBlockers?.length && <EmptyState tone={COLORS.amber}>Generate enabled with readiness warning: lead is not ready_to_generate; backend generator will make the final decision.</EmptyState>}
             {outreach.warnings?.length > 0 && <EmptyState tone={COLORS.amber}>Generate readiness warnings (non-blocking): {outreach.warnings.join(" · ")}</EmptyState>}
             {outreach.generateBlockers?.length > 0 && <EmptyState tone={COLORS.red}>Generate blocked by hard blockers: {outreach.generateBlockers.join(" · ")}</EmptyState>}
-          </section>
-
-          <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h4 className="font-medium">Sequence draft / review</h4>
-              <OutreachPill tone={tone}>{displayedReviewStatus}</OutreachPill>
-            </div>
             <SequencePreview sequence={displayedSequence} editor={sequenceEditor} dispatchEditor={dispatchSequenceEditor} editableState={sequenceEditable} onSave={saveSequenceDraft} />
             {!sequenceEditable.editable && <div className="mt-3"><OutreachDiagnostics diagnostics={diagnostics} probe={probeResult} busy={probeBusy} onProbe={runOutreachProbe} /></div>}
             <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
@@ -555,6 +537,20 @@ function OutreachSection({ brand, onRefresh }) {
             </div>
             <p className="mt-2 text-[11px]" style={{ color: COLORS.muted }}>Approval only changes backend review state for sequence_id; it does not send email. Approve/reject controls stay disabled when VITE_OUTREACH_API_BASE_URL is missing, no sequence_id exists, or backend readiness blocks review.</p>
           </section>
+
+          <KeyValueList title="Readiness checks" values={[
+            ["recipient", outreach.email],
+            ["lead_id", outreach.leadId],
+            ["sequence_id", sequenceId],
+            ["tool_key", outreach.lead?.toolAssignment?.assigned_tool_key || sequence?.tool_key || outreach.lead?.tool_key],
+            ["resolved tool", outreach.lead?.toolAssignment?.resolved_tool_key],
+            ["public tool URL", outreach.toolUrl, outreach.toolUrl],
+            ["ready_to_generate", outreach.readyToGenerate ? "true" : "false"],
+            ["blockers", outreach.blockers?.join(" · ") || "—"],
+            ["warnings", outreach.warnings?.join(" · ") || "—"],
+          ]} />
+
+          <LeadMagnetToolSelector outreach={outreach} onRefresh={onRefresh} />
 
           <KeyValueList title="Saleshandy / provider lifecycle" values={[
             ["sequence status", sequence?.status || sequence?.readiness_status],
@@ -1060,7 +1056,7 @@ function DetailPane({ brand, source, state, fullscreen, onBack }) {
   );
 }
 
-export default function BrandDrawer({ brand, onClose, onRefresh }) {
+export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand, onClose, onRefresh }) {
   const [fullscreen, setFullscreen] = useState(false);
   const [detailSource, setDetailSource] = useState(null);
   const [sources, setSources] = useState({});
@@ -1103,6 +1099,10 @@ export default function BrandDrawer({ brand, onClose, onRefresh }) {
 
   const hasRuns = runnableServices.length > 0;
   const width = fullscreen ? "100vw" : undefined;
+  const navigationIndex = brandUniverse.findIndex((item) => item.id === brand.id);
+  const canNavigateBrands = Boolean(onNavigateBrand && navigationIndex >= 0 && brandUniverse.length > 1);
+  const previousBrand = canNavigateBrands ? brandUniverse[(navigationIndex - 1 + brandUniverse.length) % brandUniverse.length] : null;
+  const nextBrand = canNavigateBrands ? brandUniverse[(navigationIndex + 1) % brandUniverse.length] : null;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/20" aria-modal="true" role="dialog">
@@ -1112,6 +1112,17 @@ export default function BrandDrawer({ brand, onClose, onRefresh }) {
             <p className="text-[11px] uppercase tracking-[0.18em]" style={{ color: COLORS.muted }}>Verificación de marca</p>
             <h1 className="mt-1 text-xl font-medium">{brand.name}</h1>
             <p className="mono text-[11px]" style={{ color: COLORS.muted }}>{brand.domain}</p>
+            {canNavigateBrands && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                <button type="button" onClick={() => onNavigateBrand(previousBrand)} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}>
+                  ← Anterior
+                </button>
+                <span className="mono text-[10px]" style={{ color: COLORS.muted }}>{navigationIndex + 1}/{brandUniverse.length}</span>
+                <button type="button" onClick={() => onNavigateBrand(nextBrand)} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}>
+                  Siguiente →
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setFullscreen((value) => !value)} className="rounded-full p-2" style={{ border: `1px solid ${COLORS.line}` }} title={fullscreen ? "Restaurar panel" : "Pantalla completa"}>
