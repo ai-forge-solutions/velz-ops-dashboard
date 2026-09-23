@@ -345,6 +345,10 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
     generate: Boolean(actionConfigured.generate),
     approve: Boolean(actionConfigured.approve),
     reject: Boolean(actionConfigured.reject),
+    editDraft: Boolean(actionConfigured.editDraft),
+    setSequenceStatus: Boolean(actionConfigured.setSequenceStatus),
+    archiveLead: Boolean(actionConfigured.archiveLead),
+    archiveBrandGroup: Boolean(actionConfigured.archiveBrandGroup),
     launch: Boolean(actionConfigured.launch ?? launchConfigured),
   };
   const generateBlockers = generateBlockersFrom({ email, sequence, blockers, lifecycleKey });
