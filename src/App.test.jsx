@@ -35,7 +35,7 @@ vi.mock("./conductorApi", async () => {
 });
 
 vi.mock("./BrandDrawer", () => ({
-  default: () => null,
+  default: ({ brand }) => brand ? React.createElement("div", { role: "dialog" }, `Panel ${brand.name}`) : null,
 }));
 
 const brand = {
@@ -142,6 +142,24 @@ beforeEach(() => {
 });
 
 describe("Brand group MVP", () => {
+  it("opens the details panel from non-ETL row clicks but not ETL controls", async () => {
+    const user = userEvent.setup();
+    await renderLoadedApp();
+
+    const table = screen.getByRole("table");
+    const row = within(table).getByText("occre.com").closest("tr");
+    await user.click(within(row).getAllByRole("cell")[2]);
+    expect(screen.getByRole("dialog").textContent).toBe("Panel OcCre");
+
+    cleanup();
+    await renderLoadedApp();
+    const freshTable = screen.getByRole("table");
+    const desktopShopifyCell = within(freshTable).getAllByRole("cell")[7];
+    await user.click(within(desktopShopifyCell).getByRole("button"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(within(desktopShopifyCell).getByRole("button", { name: /Ejecutar ahora/i })).toBeTruthy();
+  });
+
   it("exports selected lead sequences as markdown and can clear the current selection", async () => {
     const user = userEvent.setup();
     if (!URL.createObjectURL) URL.createObjectURL = vi.fn();

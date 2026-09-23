@@ -147,8 +147,6 @@ function JourneyIndicator({ steps = [] }) {
 function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSave }) {
   if (!sequence) return <EmptyState>No hay draft de secuencia source-backed para este lead todavía.</EmptyState>;
   const followups = Array.isArray(sequence.followups) ? sequence.followups : [];
-  const metadata = sequence.source_metadata || sequence.metadata || {};
-  const evidence = metadata.evidence_summary || metadata.evidence_sources || sequence.source_refs || sequence.evidence_refs;
   const isEditing = editor.mode === "edit" || editor.mode === "saving";
   const isSaving = editor.mode === "saving";
 
@@ -208,10 +206,6 @@ function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSa
             <p className="mt-1 whitespace-pre-line leading-5" style={{ color: COLORS.muted }}>{followup.body || followup.email || "—"}</p>
           </div>
         ))}
-      </div>
-      <div className="rounded-md p-3" style={{ background: COLORS.wash }}>
-        <div className="mb-1 text-[11px] font-medium">Source-backed evidence</div>
-        <p className="whitespace-pre-line mono text-[10px]" style={{ color: COLORS.muted }}>{typeof evidence === "string" ? evidence : evidence ? JSON.stringify(evidence, null, 2) : "No evidence summary exposed in current read model."}</p>
       </div>
     </div>
   );
@@ -1098,14 +1092,17 @@ export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand
   const headerTone = outreachTone(brand.outreach);
   const hasRuns = runnableServices.length > 0;
   const width = fullscreen ? "100vw" : undefined;
+  const dialogClassName = fullscreen
+    ? "h-full w-full overflow-y-auto shadow-2xl transition-all"
+    : "max-h-[92vh] w-[min(1120px,calc(100vw-2rem))] overflow-y-auto rounded-2xl shadow-2xl transition-all";
   const navigationIndex = brandUniverse.findIndex((item) => item.id === brand.id);
   const canNavigateBrands = Boolean(onNavigateBrand && navigationIndex >= 0 && brandUniverse.length > 1);
   const previousBrand = canNavigateBrands ? brandUniverse[(navigationIndex - 1 + brandUniverse.length) % brandUniverse.length] : null;
   const nextBrand = canNavigateBrands ? brandUniverse[(navigationIndex + 1) % brandUniverse.length] : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/20" aria-modal="true" role="dialog">
-      <aside className="h-full w-full overflow-y-auto shadow-2xl transition-all sm:w-[640px]" style={{ width, maxWidth: "100vw", background: COLORS.paper, color: COLORS.ink }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" aria-modal="true" role="dialog">
+      <aside className={dialogClassName} style={{ width, maxWidth: "100vw", background: COLORS.paper, color: COLORS.ink }}>
         <header className="sticky top-0 z-10 flex items-start justify-between gap-3 px-4 py-4 sm:gap-4 sm:px-6" style={{ borderBottom: `1px solid ${COLORS.line}`, background: COLORS.paper }}>
           <div>
             <p className="text-[11px] uppercase tracking-[0.18em]" style={{ color: COLORS.muted }}>Verificación de marca</p>
