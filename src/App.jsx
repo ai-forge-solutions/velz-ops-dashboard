@@ -243,6 +243,60 @@ function sequenceFromGenerateResult(result) {
   return result.sequence || result.email_sequence || result.data?.sequence || null;
 }
 
+function sequenceRecipient(sequence, outreach) {
+  const metadata = sequence?.source_metadata || sequence?.metadata || {};
+  return sequence?.recipient_email || sequence?.email || metadata.recipient_email || metadata.email || outreach?.email || outreach?.lead?.primary_email || outreach?.lead?.email || null;
+}
+
+function sequenceInitialBody(sequence) {
+  return sequence?.initial_email || sequence?.body || sequence?.email_body || "";
+}
+
+function selectedSequenceBrands(brands, selected) {
+  return brands.filter((brand) => selected.has(brand.id) && brand.outreach?.sequence);
+}
+
+export function buildSequenceExportDocument(brands, format = "md") {
+  const markdown = format === "md";
+  const blocks = brands.map((brand, index) => {
+    const sequence = brand.outreach.sequence;
+    const followups = Array.isArray(sequence.followups) ? sequence.followups : [];
+    const recipient = sequenceRecipient(sequence, brand.outreach);
+    const header = markdown ? `${index === 0 ? "# Secuencias Velz\n\n" : ""}## ${brand.name}` : `${index === 0 ? "Secuencias Velz\n================\n\n" : ""}${brand.name}`;
+    const lines = [header];
+    if (brand.domain) lines.push(markdown ? `**Dominio:** ${brand.domain}` : `Dominio: ${brand.domain}`);
+    if (brand.outreach?.leadId || sequence.lead_id) lines.push(markdown ? `**Lead ID:** ${brand.outreach?.leadId || sequence.lead_id}` : `Lead ID: ${brand.outreach?.leadId || sequence.lead_id}`);
+    if (recipient) lines.push(markdown ? `**Recipient:** ${recipient}` : `Recipient: ${recipient}`);
+    lines.push(markdown ? `**Subject:** ${sequence.subject || "—"}` : `Subject: ${sequence.subject || "—"}`);
+    lines.push("");
+    lines.push(markdown ? "### Initial email" : "Initial email");
+    lines.push(sequenceInitialBody(sequence) || "—");
+    if (followups.length) {
+      lines.push("");
+      followups.forEach((followup, followupIndex) => {
+        const label = followup.subject || `Followup ${followup.step || followupIndex + 1}`;
+        lines.push(markdown ? `### Followup ${followupIndex + 1}: ${label}` : `Followup ${followupIndex + 1}: ${label}`);
+        lines.push(followup.body || followup.email || "—");
+        if (followupIndex < followups.length - 1) lines.push("");
+      });
+    }
+    return lines.join("\n");
+  });
+  return blocks.join(markdown ? "\n\n---\n\n" : "\n\n----------------\n\n");
+}
+
+function downloadTextFile(filename, text, format) {
+  const blob = new Blob([text], { type: format === "md" ? "text/markdown;charset=utf-8" : "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 function outreachWithGeneratedSequence(outreach, sequence) {
   if (!outreach || !sequence) return outreach;
   const lead = outreach.lead || { primary_email: outreach.email, email: outreach.email };
@@ -531,6 +585,21 @@ export default function App() {
     setSelected(new Set(filtered.map((brand) => brand.id)));
   }
 
+  function clearSelection() {
+    setSelected(new Set());
+  }
+
+  function exportSelectedSequences(format) {
+    const sequenceBrands = selectedSequenceBrands(filtered, selected);
+    if (sequenceBrands.length === 0) {
+      setActionMessage({ tone: "warning", text: "Las marcas seleccionadas no tienen secuencias para exportar." });
+      return;
+    }
+    const documentText = buildSequenceExportDocument(sequenceBrands, format);
+    downloadTextFile(`velz-secuencias-${new Date().toISOString().slice(0, 10)}.${format}`, documentText, format);
+    setActionMessage({ tone: "success", text: `${sequenceBrands.length} secuencia${sequenceBrands.length === 1 ? "" : "s"} exportada${sequenceBrands.length === 1 ? "" : "s"} en .${format}.` });
+  }
+
   async function handleCreateGroup() {
     const brandIds = Array.from(selected);
     if (brandIds.length === 0) {
@@ -640,6 +709,8 @@ export default function App() {
           onUpdateGroup={handleUpdateActiveGroup}
           onDeleteGroup={handleDeleteActiveGroup}
           onSelectVisible={selectVisibleBrands}
+          onClearSelection={clearSelection}
+          onExportSequences={exportSelectedSequences}
         />
       ) : tab === "outreach" ? (
         <OutreachView brands={filtered} loading={loadingBrands} error={loadError} openBrandDrawer={setDrawerBrand} />
@@ -668,7 +739,7 @@ export default function App() {
 }
 
 // ---------------------------------------------------------------------------
-function RunsView({ brands, search, setSearch, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer, brandGroups, activeGroupId, setActiveGroupId, groupName, setGroupName, onCreateGroup, onUpdateGroup, onDeleteGroup, onSelectVisible }) {
+function RunsView({ brands, search, setSearch, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer, brandGroups, activeGroupId, setActiveGroupId, groupName, setGroupName, onCreateGroup, onUpdateGroup, onDeleteGroup, onSelectVisible, onClearSelection, onExportSequences }) {
   const activeGroup = brandGroups.find((group) => group.id === activeGroupId) || null;
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
@@ -711,6 +782,15 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
         {selected.size > 0 && (
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span style={{ color: COLORS.muted }}>{selected.size} seleccionadas</span>
+            <button type="button" onClick={onClearSelection} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}>
+              Deseleccionar todo
+            </button>
+            <button type="button" onClick={() => onExportSequences("txt")} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
+              Exportar .txt
+            </button>
+            <button type="button" onClick={() => onExportSequences("md")} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
+              Exportar .md
+            </button>
             <BulkTrigger onTrigger={triggerBulk} />
           </div>
         )}
