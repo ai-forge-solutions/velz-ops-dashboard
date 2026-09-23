@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -1060,12 +1060,21 @@ export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand
   const [fullscreen, setFullscreen] = useState(false);
   const [detailSource, setDetailSource] = useState(null);
   const [sources, setSources] = useState({});
+  const previousBrandIdRef = useRef(null);
 
   const runnableServices = useMemo(() => VERIFICATION_SERVICES, []);
 
   useEffect(() => {
-    if (!brand) return undefined;
-    setFullscreen(false);
+    if (!brand) {
+      previousBrandIdRef.current = null;
+      setFullscreen(false);
+      setDetailSource(null);
+      setSources({});
+      return undefined;
+    }
+    const openingDrawer = previousBrandIdRef.current == null;
+    previousBrandIdRef.current = brand.id;
+    if (openingDrawer) setFullscreen(false);
     setDetailSource(null);
     const services = VERIFICATION_SERVICES.filter((service) => brand.runs?.[service.key]);
     const initial = Object.fromEntries(services.map((service) => [service.source, { loading: true, data: null, error: null }]));

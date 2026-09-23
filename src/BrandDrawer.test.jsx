@@ -105,6 +105,27 @@ describe("BrandDrawer dashboard optimizations", () => {
     expect(onNavigateBrand).toHaveBeenLastCalledWith(brands[2]);
   });
 
+  it("preserves fullscreen mode when navigating to the next brand", async () => {
+    const user = userEvent.setup();
+    const BrandDrawer = (await import("./BrandDrawer.jsx")).default;
+    const { rerender } = await renderDrawer();
+
+    await user.click(screen.getByRole("button", { name: /Pantalla completa/i }));
+    expect(screen.getByRole("button", { name: /Restaurar panel/i })).toBeTruthy();
+
+    rerender(
+      <BrandDrawer
+        brand={brands[1]}
+        brandUniverse={brands}
+        onNavigateBrand={vi.fn()}
+        onClose={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Restaurar panel/i })).toBeTruthy();
+  });
+
   it("places Generate inside Sequence draft / review and keeps the backend action", async () => {
     const user = userEvent.setup();
     const onRefresh = vi.fn();
