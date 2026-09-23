@@ -92,6 +92,42 @@ beforeEach(() => {
 });
 
 describe("BrandDrawer dashboard optimizations", () => {
+  it("renders as a large centered dialog and keeps fullscreen available", async () => {
+    const user = userEvent.setup();
+    await renderDrawer();
+
+    const dialogPanel = screen.getByRole("dialog").firstElementChild;
+    expect(dialogPanel.className).toContain("rounded-2xl");
+    expect(dialogPanel.className).toContain("max-h-[92vh]");
+
+    await user.click(screen.getByRole("button", { name: /Pantalla completa/i }));
+    expect(screen.getByRole("dialog").firstElementChild.className).toContain("h-full");
+    expect(screen.getByRole("button", { name: /Restaurar panel/i })).toBeTruthy();
+  });
+
+  it("does not show the source-backed evidence block in the sequence preview", async () => {
+    await renderDrawer({
+      brand: {
+        ...brands[0],
+        outreach: {
+          ...baseOutreach,
+          sequence: {
+            id: "seq-1",
+            lead_id: "lead-1",
+            subject: "Demo subject",
+            initial_email: "Demo body",
+            followups: [],
+            metadata: { evidence_summary: "hidden evidence" },
+          },
+        },
+      },
+    });
+
+    expect(screen.getByText("Demo subject")).toBeTruthy();
+    expect(screen.queryByText(/Source-backed evidence/i)).toBeNull();
+    expect(screen.queryByText(/hidden evidence/i)).toBeNull();
+  });
+
   it("navigates within the visible brand universe without closing the drawer", async () => {
     const user = userEvent.setup();
     const onNavigateBrand = vi.fn();

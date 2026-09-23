@@ -856,8 +856,14 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
               </tr>
             )}
             {!loading && !error && brands.map((b, i) => (
-              <tr key={b.id} style={{ borderBottom: `1px solid ${COLORS.line}`, background: selected.has(b.id) ? "#F6F8F6" : i % 2 ? "#FDFDFC" : "#fff" }}>
-                <td className="text-center">
+              <tr
+                key={b.id}
+                onClick={() => openBrandDrawer(b)}
+                className="cursor-pointer"
+                style={{ borderBottom: `1px solid ${COLORS.line}`, background: selected.has(b.id) ? "#F6F8F6" : i % 2 ? "#FDFDFC" : "#fff" }}
+                title="Abrir panel de verificación de marca"
+              >
+                <td className="text-center" onClick={(event) => event.stopPropagation()}>
                   <input type="checkbox" checked={selected.has(b.id)} onChange={() => toggleRow(b.id)} />
                 </td>
                 <td className="px-3 py-2.5">
@@ -874,7 +880,7 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
                 <td className="px-3 py-2.5 text-right mono">{fmtMoney(b.revenue)}</td>
                 <td className="px-3 py-2.5"><OutreachStatusCell outreach={b.outreach} error={b.outreachLoadError} /></td>
                 {SERVICES.map(s => (
-                  <td key={s.key} className="px-2 py-1.5 relative">
+                  <td key={s.key} className="px-2 py-1.5 relative" onClick={(event) => event.stopPropagation()}>
                     <button className="w-full" onClick={() => setPopover(p => p?.brandId === b.id && p?.serviceKey === s.key ? null : { brandId: b.id, serviceKey: s.key })}>
                       <StatusDot status={statusForService(b, s)} />
                     </button>
@@ -885,7 +891,7 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
                     )}
                   </td>
                 ))}
-                <td className="px-3 py-2.5">
+                <td className="px-3 py-2.5" onClick={(event) => event.stopPropagation()}>
                   <button onClick={() => triggerPipeline(b.id)}
                     className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium whitespace-nowrap"
                     style={{ border: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
@@ -942,9 +948,14 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
   const mobilePopoverService = SERVICES.find((service) => popover?.brandId === brand.id && popover?.serviceKey === service.key);
 
   return (
-    <article className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: selected ? "#F6F8F6" : COLORS.paper }}>
+    <article
+      className="cursor-pointer rounded-lg p-4"
+      style={{ border: `1px solid ${COLORS.line}`, background: selected ? "#F6F8F6" : COLORS.paper }}
+      onClick={() => openBrandDrawer(brand)}
+      title="Abrir panel de verificación de marca"
+    >
       <div className="mb-3 flex items-start justify-between gap-3">
-        <label className="mt-1 flex shrink-0 items-center gap-2 text-xs" style={{ color: COLORS.muted }}>
+        <label className="mt-1 flex shrink-0 items-center gap-2 text-xs" style={{ color: COLORS.muted }} onClick={(event) => event.stopPropagation()}>
           <input type="checkbox" checked={selected} onChange={() => toggleRow(brand.id)} />
           Sel.
         </label>
@@ -967,7 +978,7 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
         {SERVICES.map((service) => {
           const status = statusForService(brand, service);
           return (
-            <div key={service.key} className="relative">
+            <div key={service.key} className="relative" onClick={(event) => event.stopPropagation()}>
               <button
                 type="button"
                 onClick={() => setPopover((current) => current?.brandId === brand.id && current?.serviceKey === service.key ? null : { brandId: brand.id, serviceKey: service.key })}
@@ -984,7 +995,7 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
       </div>
 
       {mobilePopoverService && (
-        <div ref={popRef} className="mt-2">
+        <div ref={popRef} className="mt-2" onClick={(event) => event.stopPropagation()}>
           <CellPopoverImpl
             brand={brand}
             service={mobilePopoverService}
@@ -994,7 +1005,7 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
         </div>
       )}
 
-      <button onClick={() => triggerPipeline(brand.id)}
+      <button onClick={(event) => { event.stopPropagation(); triggerPipeline(brand.id); }}
         className="mt-3 flex w-full items-center justify-center gap-1 rounded px-3 py-2 text-xs font-medium"
         style={{ border: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
         <Play size={12} /> Ejecutar pipeline
