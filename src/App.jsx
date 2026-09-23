@@ -3,7 +3,7 @@ import {
   Check, X, Loader2, Clock, AlertTriangle, Minus, Play, Search,
   ChevronDown, Plus, Trash2, PlayCircle, Users, ChevronRight, Info, RotateCcw
 } from "lucide-react";
-import { loadDashboardBrands } from "./supabaseData";
+import { deleteBrandGroup, loadBrandGroups, loadDashboardBrands, saveBrandGroup } from "./supabaseData";
 import {
   conductorServiceAvailable,
   executeProcess,
@@ -33,7 +33,7 @@ import {
   processStepLabel,
   resolveProcessBrandIds,
 } from "./processLogic";
-import { deriveOutreachFilters } from "./outreachStatus";
+import { deriveOutreachFilters, deriveOutreachStatus } from "./outreachStatus";
 // ---------------------------------------------------------------------------
 // Pipeline definition — service_key values match the real `service_runs` table
 // in the velz-outreach Supabase project when type="conductor". Outreach actions
@@ -238,6 +238,91 @@ function activeMetaAdRunIds(brands) {
     .map((run) => run.service_run_id);
 }
 
+function sequenceFromGenerateResult(result) {
+  if (!result || typeof result !== "object") return null;
+  return result.sequence || result.email_sequence || result.data?.sequence || null;
+}
+
+function sequenceRecipient(sequence, outreach) {
+  const metadata = sequence?.source_metadata || sequence?.metadata || {};
+  return sequence?.recipient_email || sequence?.email || metadata.recipient_email || metadata.email || outreach?.email || outreach?.lead?.primary_email || outreach?.lead?.email || null;
+}
+
+function sequenceInitialBody(sequence) {
+  return sequence?.initial_email || sequence?.body || sequence?.email_body || "";
+}
+
+function selectedSequenceBrands(brands, selected) {
+  return brands.filter((brand) => selected.has(brand.id) && brand.outreach?.sequence);
+}
+
+export function buildSequenceExportDocument(brands, format = "md") {
+  const markdown = format === "md";
+  const blocks = brands.map((brand, index) => {
+    const sequence = brand.outreach.sequence;
+    const followups = Array.isArray(sequence.followups) ? sequence.followups : [];
+    const recipient = sequenceRecipient(sequence, brand.outreach);
+    const header = markdown ? `${index === 0 ? "# Secuencias Velz\n\n" : ""}## ${brand.name}` : `${index === 0 ? "Secuencias Velz\n================\n\n" : ""}${brand.name}`;
+    const lines = [header];
+    if (brand.domain) lines.push(markdown ? `**Dominio:** ${brand.domain}` : `Dominio: ${brand.domain}`);
+    if (brand.outreach?.leadId || sequence.lead_id) lines.push(markdown ? `**Lead ID:** ${brand.outreach?.leadId || sequence.lead_id}` : `Lead ID: ${brand.outreach?.leadId || sequence.lead_id}`);
+    if (recipient) lines.push(markdown ? `**Recipient:** ${recipient}` : `Recipient: ${recipient}`);
+    lines.push(markdown ? `**Subject:** ${sequence.subject || "—"}` : `Subject: ${sequence.subject || "—"}`);
+    lines.push("");
+    lines.push(markdown ? "### Initial email" : "Initial email");
+    lines.push(sequenceInitialBody(sequence) || "—");
+    if (followups.length) {
+      lines.push("");
+      followups.forEach((followup, followupIndex) => {
+        const label = followup.subject || `Followup ${followup.step || followupIndex + 1}`;
+        lines.push(markdown ? `### Followup ${followupIndex + 1}: ${label}` : `Followup ${followupIndex + 1}: ${label}`);
+        lines.push(followup.body || followup.email || "—");
+        if (followupIndex < followups.length - 1) lines.push("");
+      });
+    }
+    return lines.join("\n");
+  });
+  return blocks.join(markdown ? "\n\n---\n\n" : "\n\n----------------\n\n");
+}
+
+function downloadTextFile(filename, text, format) {
+  const blob = new Blob([text], { type: format === "md" ? "text/markdown;charset=utf-8" : "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function outreachWithGeneratedSequence(outreach, sequence) {
+  if (!outreach || !sequence) return outreach;
+  const lead = outreach.lead || { primary_email: outreach.email, email: outreach.email };
+  return deriveOutreachStatus({
+    leadId: outreach.leadId || sequence.lead_id,
+    lead: {
+      ...lead,
+      ready_to_generate: false,
+      outreach: {
+        ...(lead.outreach || {}),
+        ready_to_generate: false,
+      },
+    },
+    sequence,
+    send: outreach.send || null,
+    events: Object.entries(outreach.events?.counts || {}).flatMap(([event_type, count]) => (
+      Array.from({ length: count }, () => ({ event_type }))
+    )),
+    magnetEvents: Object.entries(outreach.magnetEvents?.counts || {}).flatMap(([event_type, count]) => (
+      Array.from({ length: count }, () => ({ event_type }))
+    )),
+    suppression: outreach.suppression || null,
+    actionConfigured: outreach.actionConfigured || {},
+  });
+}
+
 function runSummaryChunks(run) {
   const summary = run?.response_payload?.summary;
   if (!summary || typeof summary !== "object") return [];
@@ -252,9 +337,12 @@ function runSummaryChunks(run) {
 export default function App() {
   const [tab, setTab] = useState("runs");
   const [brands, setBrands] = useState([]);
+  const [brandGroups, setBrandGroups] = useState([]);
+  const [activeGroupId, setActiveGroupId] = useState("");
   const [loadingBrands, setLoadingBrands] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [search, setSearch] = useState("");
+  const [groupName, setGroupName] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [popover, setPopover] = useState(null); // {brandId, serviceKey}
   const [drawerBrand, setDrawerBrand] = useState(null);
@@ -267,8 +355,12 @@ export default function App() {
     if (showLoading) setLoadingBrands(true);
     setLoadError(null);
     try {
-      const rows = await loadDashboardBrands();
+      const [rows, groups] = await Promise.all([
+        loadDashboardBrands(),
+        loadBrandGroups(),
+      ]);
       setBrands(rows);
+      setBrandGroups(groups);
       return rows;
     } catch (error) {
       setLoadError(error);
@@ -315,6 +407,14 @@ export default function App() {
     });
   }
 
+  function patchOutreachSequence(brandId, sequence) {
+    if (!sequence) return;
+    setBrands(prev => prev.map(b => b.id !== brandId ? b : {
+      ...b,
+      outreach: outreachWithGeneratedSequence(b.outreach, sequence),
+    }));
+  }
+
   useEffect(() => {
     let cancelled = false;
 
@@ -322,8 +422,14 @@ export default function App() {
       setLoadingBrands(true);
       setLoadError(null);
       try {
-        const rows = await loadDashboardBrands();
-        if (!cancelled) setBrands(rows);
+        const [rows, groups] = await Promise.all([
+          loadDashboardBrands(),
+          loadBrandGroups(),
+        ]);
+        if (!cancelled) {
+          setBrands(rows);
+          setBrandGroups(groups);
+        }
       } catch (error) {
         if (!cancelled) setLoadError(error);
       } finally {
@@ -382,15 +488,19 @@ export default function App() {
 
     markServiceRunning(brandId, serviceKey);
     const brandName = brand?.name || brandId;
+    let generatedSequence = null;
     setActionMessage({ tone: "success", text: `Lanzando ${serviceLabel(serviceKey)} para ${brandName}…` });
     try {
       if (service?.type === "outreach" && service.action === "generate") {
         const result = await generateOutreachSequence(brand.outreach.leadId);
+        generatedSequence = sequenceFromGenerateResult(result);
         updateRun(brandId, serviceKey, {
           status: "success",
           message: result?.message || "Drafting completado por el backend de Outreach.",
           response_payload: result,
         });
+        patchOutreachSequence(brandId, generatedSequence);
+        setActionMessage({ tone: "success", text: result?.message || "Drafting completado por el backend de Outreach." });
       } else if (service?.type === "outreach" && service.action === "launch") {
         const sequenceId = sequenceIdFor(brand.outreach.sequence);
         const result = await launchSaleshandyQaBulk(sequenceId, brand.outreach.leadId);
@@ -412,8 +522,10 @@ export default function App() {
     } finally {
       try {
         await refreshDashboardBrands();
+        patchOutreachSequence(brandId, generatedSequence);
       } catch (error) {
         setActionMessage({ tone: "error", text: `El servicio terminó, pero no se pudo refrescar Supabase: ${error.message}` });
+        patchOutreachSequence(brandId, generatedSequence);
       }
     }
   }
@@ -460,10 +572,84 @@ export default function App() {
     }
   }
 
-  const filtered = brands.filter(b =>
-    b.name.toLowerCase().includes(search.toLowerCase()) ||
-    b.domain.toLowerCase().includes(search.toLowerCase())
-  );
+  const activeGroup = brandGroups.find((group) => group.id === activeGroupId) || null;
+  const activeGroupBrandIds = new Set(activeGroup?.brandIds || []);
+  const filtered = brands.filter((b) => {
+    const matchesSearch = b.name.toLowerCase().includes(search.toLowerCase()) ||
+      b.domain.toLowerCase().includes(search.toLowerCase());
+    const matchesGroup = !activeGroup || activeGroupBrandIds.has(b.id);
+    return matchesSearch && matchesGroup;
+  });
+
+  function selectVisibleBrands() {
+    setSelected(new Set(filtered.map((brand) => brand.id)));
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
+
+  function exportSelectedSequences(format) {
+    const sequenceBrands = selectedSequenceBrands(filtered, selected);
+    if (sequenceBrands.length === 0) {
+      setActionMessage({ tone: "warning", text: "Las marcas seleccionadas no tienen secuencias para exportar." });
+      return;
+    }
+    const documentText = buildSequenceExportDocument(sequenceBrands, format);
+    downloadTextFile(`velz-secuencias-${new Date().toISOString().slice(0, 10)}.${format}`, documentText, format);
+    setActionMessage({ tone: "success", text: `${sequenceBrands.length} secuencia${sequenceBrands.length === 1 ? "" : "s"} exportada${sequenceBrands.length === 1 ? "" : "s"} en .${format}.` });
+  }
+
+  async function handleCreateGroup() {
+    const brandIds = Array.from(selected);
+    if (brandIds.length === 0) {
+      setActionMessage({ tone: "warning", text: "Selecciona al menos una marca antes de crear un grupo." });
+      return;
+    }
+    const name = groupName.trim();
+    if (!name) {
+      setActionMessage({ tone: "warning", text: "Escribe un nombre para crear el grupo." });
+      return;
+    }
+    try {
+      const group = await saveBrandGroup({ name, brandIds });
+      setBrandGroups((current) => [...current.filter((item) => item.id !== group.id), group].sort((a, b) => a.name.localeCompare(b.name)));
+      setActiveGroupId(group.id);
+      setGroupName("");
+      setActionMessage({ tone: "success", text: `Grupo “${group.name}” creado con ${group.brandCount} marcas.` });
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `No se pudo crear el grupo: ${error.message}` });
+    }
+  }
+
+  async function handleUpdateActiveGroup() {
+    if (!activeGroup) return;
+    try {
+      const group = await saveBrandGroup({
+        id: activeGroup.id,
+        name: activeGroup.name,
+        description: activeGroup.description,
+        brandIds: Array.from(selected),
+      });
+      setBrandGroups((current) => current.map((item) => item.id === group.id ? group : item));
+      setActionMessage({ tone: "success", text: `Grupo “${group.name}” actualizado con ${group.brandCount} marcas.` });
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `No se pudo actualizar el grupo: ${error.message}` });
+    }
+  }
+
+  async function handleDeleteActiveGroup() {
+    if (!activeGroup) return;
+    if (!window.confirm(`¿Borrar el grupo “${activeGroup.name}”?`)) return;
+    try {
+      await deleteBrandGroup(activeGroup.id);
+      setBrandGroups((current) => current.filter((item) => item.id !== activeGroup.id));
+      setActiveGroupId("");
+      setActionMessage({ tone: "success", text: `Grupo “${activeGroup.name}” borrado.` });
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `No se pudo borrar el grupo: ${error.message}` });
+    }
+  }
 
   function toggleRow(id) {
     setSelected(prev => {
@@ -514,12 +700,24 @@ export default function App() {
           triggerService={triggerService} triggerPipeline={triggerPipeline} triggerBulk={triggerBulk}
           popover={popover} setPopover={setPopover} popRef={popRef}
           openBrandDrawer={setDrawerBrand}
+          brandGroups={brandGroups}
+          activeGroupId={activeGroupId}
+          setActiveGroupId={setActiveGroupId}
+          groupName={groupName}
+          setGroupName={setGroupName}
+          onCreateGroup={handleCreateGroup}
+          onUpdateGroup={handleUpdateActiveGroup}
+          onDeleteGroup={handleDeleteActiveGroup}
+          onSelectVisible={selectVisibleBrands}
+          onClearSelection={clearSelection}
+          onExportSequences={exportSelectedSequences}
         />
       ) : tab === "outreach" ? (
         <OutreachView brands={filtered} loading={loadingBrands} error={loadError} openBrandDrawer={setDrawerBrand} />
       ) : (
         <ProcessesView
           brands={brands} selected={selected}
+          brandGroups={brandGroups}
           actionMessage={actionMessage}
           setActionMessage={setActionMessage}
           clearActionMessage={() => setActionMessage(null)}
@@ -528,6 +726,8 @@ export default function App() {
 
       <BrandDrawer
         brand={drawerBrand}
+        brandUniverse={filtered}
+        onNavigateBrand={setDrawerBrand}
         onClose={() => setDrawerBrand(null)}
         onRefresh={async () => {
           const rows = await refreshDashboardBrands();
@@ -539,7 +739,8 @@ export default function App() {
 }
 
 // ---------------------------------------------------------------------------
-function RunsView({ brands, search, setSearch, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer }) {
+function RunsView({ brands, search, setSearch, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer, brandGroups, activeGroupId, setActiveGroupId, groupName, setGroupName, onCreateGroup, onUpdateGroup, onDeleteGroup, onSelectVisible, onClearSelection, onExportSequences }) {
+  const activeGroup = brandGroups.find((group) => group.id === activeGroupId) || null;
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
       {/* Toolbar */}
@@ -550,9 +751,46 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
             placeholder="Buscar marca o dominio…"
             className="w-full bg-transparent text-sm outline-none sm:w-56 sm:text-xs" />
         </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <label className="flex items-center gap-2 rounded-md px-3 py-2 sm:py-1.5" style={{ border: `1px solid ${COLORS.line}` }}>
+            <span style={{ color: COLORS.muted }}>Grupo:</span>
+            <select value={activeGroupId} onChange={(event) => setActiveGroupId(event.target.value)} className="bg-transparent outline-none">
+              <option value="">Todos</option>
+              {brandGroups.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.brandCount})</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={onSelectVisible} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
+            Seleccionar visibles
+          </button>
+          <input
+            aria-label="Nombre del grupo"
+            value={groupName}
+            onChange={(event) => setGroupName(event.target.value)}
+            placeholder="Nombre del grupo"
+            className="w-44 rounded px-2.5 py-1 outline-none"
+            style={{ border: `1px solid ${COLORS.line}` }}
+          />
+          <button type="button" onClick={onCreateGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ background: COLORS.ink, color: "#fff" }}>
+            <Plus size={11} /> Crear grupo
+          </button>
+          {activeGroup && (
+            <button type="button" onClick={onDeleteGroup} className="inline-flex items-center gap-1 rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
+              <Trash2 size={11} /> Borrar grupo
+            </button>
+          )}
+        </div>
         {selected.size > 0 && (
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span style={{ color: COLORS.muted }}>{selected.size} seleccionadas</span>
+            <button type="button" onClick={onClearSelection} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}>
+              Deseleccionar todo
+            </button>
+            <button type="button" onClick={() => onExportSequences("txt")} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
+              Exportar .txt
+            </button>
+            <button type="button" onClick={() => onExportSequences("md")} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
+              Exportar .md
+            </button>
             <BulkTrigger onTrigger={triggerBulk} />
           </div>
         )}
@@ -618,8 +856,14 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
               </tr>
             )}
             {!loading && !error && brands.map((b, i) => (
-              <tr key={b.id} style={{ borderBottom: `1px solid ${COLORS.line}`, background: selected.has(b.id) ? "#F6F8F6" : i % 2 ? "#FDFDFC" : "#fff" }}>
-                <td className="text-center">
+              <tr
+                key={b.id}
+                onClick={() => openBrandDrawer(b)}
+                className="cursor-pointer"
+                style={{ borderBottom: `1px solid ${COLORS.line}`, background: selected.has(b.id) ? "#F6F8F6" : i % 2 ? "#FDFDFC" : "#fff" }}
+                title="Abrir panel de verificación de marca"
+              >
+                <td className="text-center" onClick={(event) => event.stopPropagation()}>
                   <input type="checkbox" checked={selected.has(b.id)} onChange={() => toggleRow(b.id)} />
                 </td>
                 <td className="px-3 py-2.5">
@@ -636,7 +880,7 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
                 <td className="px-3 py-2.5 text-right mono">{fmtMoney(b.revenue)}</td>
                 <td className="px-3 py-2.5"><OutreachStatusCell outreach={b.outreach} error={b.outreachLoadError} /></td>
                 {SERVICES.map(s => (
-                  <td key={s.key} className="px-2 py-1.5 relative">
+                  <td key={s.key} className="px-2 py-1.5 relative" onClick={(event) => event.stopPropagation()}>
                     <button className="w-full" onClick={() => setPopover(p => p?.brandId === b.id && p?.serviceKey === s.key ? null : { brandId: b.id, serviceKey: s.key })}>
                       <StatusDot status={statusForService(b, s)} />
                     </button>
@@ -647,7 +891,7 @@ function RunsView({ brands, search, setSearch, loading, error, actionMessage, cl
                     )}
                   </td>
                 ))}
-                <td className="px-3 py-2.5">
+                <td className="px-3 py-2.5" onClick={(event) => event.stopPropagation()}>
                   <button onClick={() => triggerPipeline(b.id)}
                     className="flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-medium whitespace-nowrap"
                     style={{ border: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
@@ -704,9 +948,14 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
   const mobilePopoverService = SERVICES.find((service) => popover?.brandId === brand.id && popover?.serviceKey === service.key);
 
   return (
-    <article className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: selected ? "#F6F8F6" : COLORS.paper }}>
+    <article
+      className="cursor-pointer rounded-lg p-4"
+      style={{ border: `1px solid ${COLORS.line}`, background: selected ? "#F6F8F6" : COLORS.paper }}
+      onClick={() => openBrandDrawer(brand)}
+      title="Abrir panel de verificación de marca"
+    >
       <div className="mb-3 flex items-start justify-between gap-3">
-        <label className="mt-1 flex shrink-0 items-center gap-2 text-xs" style={{ color: COLORS.muted }}>
+        <label className="mt-1 flex shrink-0 items-center gap-2 text-xs" style={{ color: COLORS.muted }} onClick={(event) => event.stopPropagation()}>
           <input type="checkbox" checked={selected} onChange={() => toggleRow(brand.id)} />
           Sel.
         </label>
@@ -729,7 +978,7 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
         {SERVICES.map((service) => {
           const status = statusForService(brand, service);
           return (
-            <div key={service.key} className="relative">
+            <div key={service.key} className="relative" onClick={(event) => event.stopPropagation()}>
               <button
                 type="button"
                 onClick={() => setPopover((current) => current?.brandId === brand.id && current?.serviceKey === service.key ? null : { brandId: brand.id, serviceKey: service.key })}
@@ -746,7 +995,7 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
       </div>
 
       {mobilePopoverService && (
-        <div ref={popRef} className="mt-2">
+        <div ref={popRef} className="mt-2" onClick={(event) => event.stopPropagation()}>
           <CellPopoverImpl
             brand={brand}
             service={mobilePopoverService}
@@ -756,7 +1005,7 @@ function MobileBrandCard({ brand, selected, toggleRow, triggerService, triggerPi
         </div>
       )}
 
-      <button onClick={() => triggerPipeline(brand.id)}
+      <button onClick={(event) => { event.stopPropagation(); triggerPipeline(brand.id); }}
         className="mt-3 flex w-full items-center justify-center gap-1 rounded px-3 py-2 text-xs font-medium"
         style={{ border: `1px solid ${COLORS.ink}`, color: COLORS.ink }}>
         <Play size={12} /> Ejecutar pipeline
@@ -879,20 +1128,19 @@ function OutreachView({ brands, loading, error, openBrandDrawer }) {
         ))}
       </div>
       <div className="overflow-x-auto rounded-md" style={{ border: `1px solid ${COLORS.line}` }}>
-        <table className="w-full min-w-[900px] text-xs">
+        <table className="w-full min-w-[800px] text-xs">
           <thead>
             <tr style={{ background: "#FAFAF8", borderBottom: `1px solid ${COLORS.line}` }}>
               <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Marca / lead</th>
               <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Readiness</th>
               <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Lifecycle</th>
               <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Provider / engagement</th>
-              <th className="px-3 py-2.5 text-left font-medium" style={{ color: COLORS.muted }}>Next action</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}><Loader2 size={14} className="mr-2 inline animate-spin" /> Cargando Outreach desde Supabase…</td></tr>}
-            {!loading && error && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>No se pudieron leer marcas: {error.message}</td></tr>}
-            {!loading && !error && rows.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>No hay leads para este filtro.</td></tr>}
+            {loading && <tr><td colSpan={4} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}><Loader2 size={14} className="mr-2 inline animate-spin" /> Cargando Outreach desde Supabase…</td></tr>}
+            {!loading && error && <tr><td colSpan={4} className="px-4 py-8 text-center" style={{ color: COLORS.red }}>No se pudieron leer marcas: {error.message}</td></tr>}
+            {!loading && !error && rows.length === 0 && <tr><td colSpan={4} className="px-4 py-8 text-center" style={{ color: COLORS.muted }}>No hay leads para este filtro.</td></tr>}
             {!loading && !error && rows.map((brand) => {
               const outreach = brand.outreach;
               const tone = outreachTone(outreach);
@@ -917,9 +1165,6 @@ function OutreachView({ brands, loading, error, openBrandDrawer }) {
                     <div>events: {Object.entries(outreach?.events?.counts || {}).map(([key, count]) => `${key}:${count}`).join(" · ") || "—"}</div>
                     <div>tool: {Object.entries(outreach?.magnetEvents?.counts || {}).map(([key, count]) => `${key}:${count}`).join(" · ") || "—"}</div>
                   </td>
-                  <td className="px-3 py-3 align-top" style={{ color: outreach?.blockers?.length ? COLORS.red : COLORS.ink }}>
-                    {brand.outreachLoadError ? `Supabase read blocked: ${brand.outreachLoadError.message}` : outreach?.nextAction?.label || "No outreach data"}
-                  </td>
                 </tr>
               );
             })}
@@ -931,8 +1176,9 @@ function OutreachView({ brands, loading, error, openBrandDrawer }) {
 }
 
 // ---------------------------------------------------------------------------
-function ProcessesView({ brands, selected, actionMessage, setActionMessage, clearActionMessage }) {
+function ProcessesView({ brands, selected, brandGroups, actionMessage, setActionMessage, clearActionMessage }) {
   const [scope, setScope] = useState("selected");
+  const [processGroupId, setProcessGroupId] = useState("");
   const [fitScoreMin, setFitScoreMin] = useState(70);
   const [limit, setLimit] = useState(500);
   const [steps, setSteps] = useState(defaultProcessSteps);
@@ -950,7 +1196,9 @@ function ProcessesView({ brands, selected, actionMessage, setActionMessage, clea
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [executingRunId, setExecutingRunId] = useState(null);
 
-  const brandIds = resolveProcessBrandIds({ brands, selectedIds: selected, scope, fitScoreMin, limit });
+  const selectedProcessGroup = brandGroups.find((group) => group.id === processGroupId) || brandGroups[0] || null;
+  const groupBrandIds = selectedProcessGroup?.brandIds || [];
+  const brandIds = resolveProcessBrandIds({ brands, selectedIds: selected, scope, fitScoreMin, limit, groupBrandIds });
   const payload = buildProcessPayload({ brandIds, fitScoreMin, limit, steps, strategy, maxConcurrency, continueOnError });
   const currentSignature = payloadSignature(payload);
   const previewIsCurrent = validatedSignature === currentSignature;
@@ -1110,10 +1358,23 @@ function ProcessesView({ brands, selected, actionMessage, setActionMessage, clea
 
         <section className="mb-5">
           <label className="mb-2 block text-[11px]" style={{ color: COLORS.muted }}>Marcas</label>
-          <div className="grid gap-2 text-xs sm:grid-cols-3">
+          <div className="grid gap-2 text-xs sm:grid-cols-4">
             <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "selected" ? COLORS.ink : COLORS.line}` }}>
               <input type="radio" checked={scope === "selected"} onChange={() => { setScope("selected"); resetPreviewState(); }} className="mr-2" />
               Seleccionadas ({selected.size})
+            </label>
+            <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "group" ? COLORS.ink : COLORS.line}` }}>
+              <input type="radio" checked={scope === "group"} disabled={brandGroups.length === 0} onChange={() => { setScope("group"); resetPreviewState(); }} className="mr-2" />
+              Grupo
+              <select
+                disabled={brandGroups.length === 0}
+                value={selectedProcessGroup?.id || ""}
+                onChange={(event) => { setProcessGroupId(event.target.value); setScope("group"); resetPreviewState(); }}
+                className="mt-2 w-full rounded px-1 py-0.5"
+                style={{ border: `1px solid ${COLORS.line}` }}
+              >
+                {brandGroups.length === 0 ? <option value="">Sin grupos</option> : brandGroups.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.brandCount})</option>)}
+              </select>
             </label>
             <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "fit_score" ? COLORS.ink : COLORS.line}` }}>
               <input type="radio" checked={scope === "fit_score"} onChange={() => { setScope("fit_score"); resetPreviewState(); }} className="mr-2" />

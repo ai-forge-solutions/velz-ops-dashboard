@@ -9,6 +9,10 @@ const conductorApi = await import("../src/conductorApi.js?runtime-config-test");
 
 assert.equal(conductorApi.outreachActionConfigured("editDraft"), true);
 assert.equal(
+  conductorApi.buildOutreachActionUrl("https://runtime-outreach.example.com/", "launch", { sequenceId: "seq runtime" }),
+  "https://runtime-outreach.example.com/outreach/sequences/seq%20runtime/launch-instantly",
+);
+assert.equal(
   conductorApi.buildOutreachActionUrl("https://runtime-outreach.example.com/", "editDraft", { sequenceId: "seq runtime" }),
   "https://runtime-outreach.example.com/runtime/sequences/seq%20runtime/draft",
 );
@@ -34,6 +38,7 @@ assert.deepEqual(conductorApi.outreachRuntimeDiagnostics(), {
   baseUrlSource: "runtime-config",
   editDraftPath: "/late/sequences/{sequence_id}/draft",
   editDraftConfigured: true,
+  launchPath: "/outreach/sequences/{sequence_id}/launch-instantly",
   runtimeConfigPresent: true,
   runtimeConfigKeys: ["VITE_OUTREACH_API_BASE_URL", "VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH"],
   viteHasOutreachBase: false,

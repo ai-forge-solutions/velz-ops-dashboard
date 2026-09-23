@@ -12,19 +12,24 @@ export const OUTREACH_DEFAULT_ACTION_PATHS = {
   approve: "/outreach/sequences/{sequence_id}/approve",
   reject: "/outreach/sequences/{sequence_id}/reject",
   editDraft: "/outreach/sequences/{sequence_id}/draft-fields",
-  launch: "/outreach/sequences/{sequence_id}/launch-saleshandy",
+  launch: "/outreach/sequences/{sequence_id}/launch-instantly",
 };
 
 const OUTREACH_ACTION_ENV_KEYS = {
-  generate: "VITE_OUTREACH_GENERATE_SEQUENCE_PATH",
-  approve: "VITE_OUTREACH_APPROVE_SEQUENCE_PATH",
-  reject: "VITE_OUTREACH_REJECT_SEQUENCE_PATH",
-  editDraft: "VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH",
-  launch: "VITE_OUTREACH_LAUNCH_SALESHANDY_PATH",
+  generate: ["VITE_OUTREACH_GENERATE_SEQUENCE_PATH"],
+  approve: ["VITE_OUTREACH_APPROVE_SEQUENCE_PATH"],
+  reject: ["VITE_OUTREACH_REJECT_SEQUENCE_PATH"],
+  editDraft: ["VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH"],
+  launch: ["VITE_OUTREACH_LAUNCH_INSTANTLY_PATH", "VITE_OUTREACH_LAUNCH_SALESHANDY_PATH"],
 };
 
 function outreachActionPath(action) {
-  return envValue(OUTREACH_ACTION_ENV_KEYS[action]) || OUTREACH_DEFAULT_ACTION_PATHS[action];
+  const keys = OUTREACH_ACTION_ENV_KEYS[action] || [];
+  for (const key of keys) {
+    const value = envValue(key);
+    if (value) return value;
+  }
+  return OUTREACH_DEFAULT_ACTION_PATHS[action];
 }
 
 export const CONDUCTOR_ENDPOINTS = {
@@ -149,6 +154,23 @@ function interpolateOutreachPath(path, { leadId, sequenceId }) {
     .replace(/\{sequenceId\}/g, encodeURIComponent(sequenceId || ""));
 }
 
+function isIdempotentSequenceExistsPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  return payload.sequence_exists === true &&
+    payload.ready_to_review === true &&
+    payload.next_action === "approve_sequence";
+}
+
+function idempotentSequenceExistsResult(payload) {
+  return {
+    ...payload,
+    success: true,
+    status: payload.status || "success",
+    idempotent: true,
+    message: payload.message || "Draft ya existe — pendiente de revisión",
+  };
+}
+
 export function buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId } = {}) {
   const path = outreachActionPath(action);
   if (!baseUrl || !path) return null;
@@ -183,6 +205,9 @@ async function outreachRequest(action, { leadId, sequenceId, body = {}, method =
     }
   }
   if (!response.ok) {
+    if (response.status === 409 && action === "generate" && isIdempotentSequenceExistsPayload(payload)) {
+      return idempotentSequenceExistsResult(payload);
+    }
     throw new Error(normalizeErrorPayload(payload, `Outreach ${action} respondió HTTP ${response.status}`));
   }
   return payload;
@@ -246,6 +271,7 @@ export function outreachRuntimeDiagnostics() {
     baseUrlSource: envSource("VITE_OUTREACH_API_BASE_URL") !== "missing" ? envSource("VITE_OUTREACH_API_BASE_URL") : envSource("VITE_OUTREACH_ORCHESTRATION_BASE_URL"),
     editDraftPath: outreachActionPath("editDraft"),
     editDraftConfigured: outreachActionConfigured("editDraft"),
+    launchPath: outreachActionPath("launch"),
     runtimeConfigPresent: Boolean(globalThis.__VELZ_RUNTIME_CONFIG__),
     runtimeConfigKeys: Object.keys(runtimeEnv).filter((key) => key.startsWith("VITE_")).sort(),
     viteHasOutreachBase: Boolean(VITE_ENV.VITE_OUTREACH_API_BASE_URL || VITE_ENV.VITE_OUTREACH_ORCHESTRATION_BASE_URL),

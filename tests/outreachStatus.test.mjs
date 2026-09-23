@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   OUTREACH_DEFAULT_ACTION_PATHS,
   buildOutreachActionUrl,
+  generateOutreachSequence,
   normalizeErrorPayload,
 } from "../src/conductorApi.js";
 import {
@@ -18,7 +19,7 @@ assert.deepEqual(OUTREACH_DEFAULT_ACTION_PATHS, {
   approve: "/outreach/sequences/{sequence_id}/approve",
   reject: "/outreach/sequences/{sequence_id}/reject",
   editDraft: "/outreach/sequences/{sequence_id}/draft-fields",
-  launch: "/outreach/sequences/{sequence_id}/launch-saleshandy",
+  launch: "/outreach/sequences/{sequence_id}/launch-instantly",
 });
 assert.equal(
   buildOutreachActionUrl("https://outreach.example.com/", "generate", { leadId: "lead 1" }),
@@ -38,7 +39,7 @@ assert.equal(
 );
 assert.equal(
   buildOutreachActionUrl("https://outreach.example.com", "launch", { sequenceId: "seq-1" }),
-  "https://outreach.example.com/outreach/sequences/seq-1/launch-saleshandy",
+  "https://outreach.example.com/outreach/sequences/seq-1/launch-instantly",
 );
 assert.throws(() => buildOutreachActionUrl("https://outreach.example.com", "launch", { leadId: qaLeadId }), /sequence_id/);
 assert.equal(normalizeErrorPayload({ detail: { blocker: "send_kill_switch_enabled" } }, "fallback"), "send_kill_switch_enabled");
@@ -179,6 +180,37 @@ const notReadyMissingEmailCannotGenerate = deriveOutreachStatus({
 assert.equal(notReadyMissingEmailCannotGenerate.generateEligible, false);
 assert.match(notReadyMissingEmailCannotGenerate.generateBlockers.join(" "), /missing recipient email/i);
 
+const noEnviableFailedDraft = deriveOutreachStatus({
+  leadId: "lead-failed-copy",
+  lead: {
+    primary_email: "buyer@example.com",
+    outreach_blockers: ["existing sequence"],
+  },
+  sequence: {
+    id: "seq-no-enviable",
+    lead_id: "lead-failed-copy",
+    subject: "NO_ENVIABLE",
+    initial_email: "NO_ENVIABLE: falla Entregable: faltan fuentes requeridas ['brand_reviews']",
+    status: "draft",
+    review_status: "not_ready",
+    send_status: "dry_run",
+    metadata: {
+      no_enviable_stage: "selector",
+      motivo_no_enviable: ["falla Entregable: faltan fuentes requeridas ['brand_reviews']"],
+    },
+  },
+  send: null,
+  events: [],
+  magnetEvents: [],
+  suppression: null,
+  actionConfigured: { generate: true },
+});
+assert.equal(noEnviableFailedDraft.generateEligible, true);
+assert.deepEqual(noEnviableFailedDraft.generateBlockers, []);
+assert.deepEqual(noEnviableFailedDraft.blockers, []);
+assert.match(noEnviableFailedDraft.warnings.join(" "), /existing sequence/i);
+assert.equal(noEnviableFailedDraft.nextAction.key, "generate");
+
 const launchReady = deriveOutreachStatus({
   leadId: qaLeadId,
   lead: { primary_email: "miguelcarmonar@gmail.com" },
@@ -205,7 +237,7 @@ const pendingMissingToolUrl = deriveOutreachStatus({
 assert.equal(pendingMissingToolUrl.readiness.key, "pending_review");
 assert.equal(pendingMissingToolUrl.canApprove, true);
 assert.deepEqual(pendingMissingToolUrl.blockers, []);
-assert.match(pendingMissingToolUrl.warnings.join(" "), /missing tool URL/i);
+assert.deepEqual(pendingMissingToolUrl.warnings, []);
 assert.deepEqual(pendingMissingToolUrl.launchBlockers, []);
 
 const pendingBackendMissingToolUrl = deriveOutreachStatus({
@@ -220,7 +252,7 @@ const pendingBackendMissingToolUrl = deriveOutreachStatus({
 });
 assert.equal(pendingBackendMissingToolUrl.canApprove, true);
 assert.deepEqual(pendingBackendMissingToolUrl.blockers, []);
-assert.match(pendingBackendMissingToolUrl.warnings.join(" "), /missing tool URL/i);
+assert.deepEqual(pendingBackendMissingToolUrl.warnings, []);
 
 const suppressed = deriveOutreachStatus({
   leadId: qaLeadId,
@@ -260,3 +292,22 @@ assert.deepEqual(approvedNotScheduled.launchBlockers, []);
 assert.deepEqual(deriveOutreachFilters(pendingDryRun), ["needs_review"]);
 assert.deepEqual(deriveOutreachFilters(delivered), ["launched", "engaged"]);
 assert.deepEqual(deriveOutreachFilters(suppressed), ["failed_blocked", "suppressed"]);
+
+globalThis.__VELZ_RUNTIME_CONFIG__ = { VITE_OUTREACH_API_BASE_URL: "https://outreach.example.com" };
+const originalFetch = globalThis.fetch;
+let capturedGenerateUrl = null;
+globalThis.fetch = async (url) => {
+  capturedGenerateUrl = String(url);
+  return new Response(JSON.stringify({
+    sequence_exists: true,
+    ready_to_review: true,
+    next_action: "approve_sequence",
+  }), { status: 409, headers: { "Content-Type": "application/json" } });
+};
+const idempotentGenerate = await generateOutreachSequence("lead-existing");
+assert.equal(capturedGenerateUrl, "https://outreach.example.com/outreach/leads/lead-existing/sequences/generate");
+assert.equal(idempotentGenerate.sequence_exists, true);
+assert.equal(idempotentGenerate.ready_to_review, true);
+assert.equal(idempotentGenerate.message, "Draft ya existe — pendiente de revisión");
+globalThis.fetch = originalFetch;
+delete globalThis.__VELZ_RUNTIME_CONFIG__;

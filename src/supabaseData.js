@@ -109,6 +109,16 @@ const LEAD_MAGNET_ASSIGNMENT_FIELDS = [
   "assignment_source",
 ].join(",");
 
+const BRAND_GROUP_FIELDS = [
+  "id",
+  "name",
+  "description",
+  "brand_count",
+  "brand_ids",
+  "created_at",
+  "updated_at",
+].join(",");
+
 function requireSupabaseConfig() {
   const supabaseUrl = envValue("VITE_SUPABASE_URL");
   const supabaseAnonKey = envValue("VITE_SUPABASE_ANON_KEY");
@@ -400,6 +410,43 @@ function attachOutreach(brands, outreachByBrand, error = null) {
     outreach: outreachByBrand?.get(brand.id) || null,
     outreachLoadError: error,
   }));
+}
+
+function toBrandGroup(row) {
+  const rawBrandIds = Array.isArray(row.brand_ids) ? row.brand_ids : [];
+  return {
+    id: row.id,
+    name: row.name || "Grupo sin nombre",
+    description: row.description || "",
+    brandCount: Number(row.brand_count ?? rawBrandIds.length ?? 0),
+    brandIds: rawBrandIds.filter(Boolean).map(String),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function loadBrandGroups() {
+  const params = new URLSearchParams({
+    select: BRAND_GROUP_FIELDS,
+    order: "name.asc",
+  });
+  const rows = await supabaseRest("v_brand_groups", params);
+  return rows.map(toBrandGroup);
+}
+
+export async function saveBrandGroup({ id = null, name, description = "", brandIds = [] } = {}) {
+  const row = await supabaseRpc("save_brand_group", {
+    p_group_id: id || null,
+    p_name: name || "",
+    p_description: description || "",
+    p_brand_ids: Array.from(new Set((brandIds || []).filter(Boolean))),
+  });
+  return toBrandGroup(Array.isArray(row) ? row[0] : row);
+}
+
+export async function deleteBrandGroup(id) {
+  if (!id) throw new Error("Falta id de grupo para borrar.");
+  await supabaseRpc("delete_brand_group", { p_group_id: id });
 }
 
 export async function loadLeadMagnetTools() {

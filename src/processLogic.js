@@ -1,6 +1,7 @@
 export const PROCESS_STEP_OPTIONS = [
   { id: "brand_context", label: "Contexto de marca", defaultMode: "preserve_success", group: "ETL" },
   { id: "meta_ads", label: "Meta Ads", defaultMode: "preserve_success", group: "ETL" },
+  { id: "web_stack_wappalyzer", label: "Tech Stack", defaultMode: "preserve_success", group: "ETL" },
   { id: "shopify_signals", label: "Shopify Signals", defaultMode: "preserve_success", group: "ETL" },
   { id: "reviews", label: "Reviews", defaultMode: "preserve_success", group: "ETL" },
   { id: "email_generation", label: "Drafting", defaultMode: "overwrite", group: "Outreach" },
@@ -66,12 +67,15 @@ export function normalizeProcessStep(step) {
   };
 }
 
-export function resolveProcessBrandIds({ brands = [], selectedIds = new Set(), scope = "all", fitScoreMin = 70, limit = 500 } = {}) {
+export function resolveProcessBrandIds({ brands = [], selectedIds = new Set(), scope = "all", fitScoreMin = 70, limit = 500, groupBrandIds = [] } = {}) {
+  const groupIds = new Set(groupBrandIds || []);
   const rows = scope === "selected"
     ? brands.filter((brand) => selectedIds.has(brand.id))
-    : scope === "fit_score"
-      ? brands.filter((brand) => Number(brand.fit ?? brand.fit_score ?? 0) >= Number(fitScoreMin))
-      : brands;
+    : scope === "group"
+      ? brands.filter((brand) => groupIds.has(brand.id))
+      : scope === "fit_score"
+        ? brands.filter((brand) => Number(brand.fit ?? brand.fit_score ?? 0) >= Number(fitScoreMin))
+        : brands;
   return rows.slice(0, Math.max(0, Number(limit) || 0)).map((brand) => brand.id);
 }
 

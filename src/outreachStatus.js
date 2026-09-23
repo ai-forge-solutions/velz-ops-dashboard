@@ -106,9 +106,21 @@ function isGenerateHardBlocker(value) {
   ].some((needle) => message.includes(needle));
 }
 
+function isNoEnviableFailedDraft(sequence) {
+  if (!sequence) return false;
+  const metadata = pickMetadata(sequence);
+  const subject = normalize(sequence.subject);
+  const review = normalize(sequence.review_status || metadata.review_status);
+  const stage = metadata.no_enviable_stage;
+  const reasons = metadata.motivo_no_enviable || sequence.not_ready_reasons || [];
+  const hasNoEnviableReason = Array.isArray(reasons) ? reasons.length > 0 : Boolean(reasons);
+  return subject === "no_enviable" || review === "not_ready" && (Boolean(stage) || hasNoEnviableReason);
+}
+
 function isReadinessWarning(value) {
   const message = normalizedMessage(value);
-  return isMissingToolUrl(message) || [
+  if (isMissingToolUrl(message)) return false;
+  return [
     "not ready",
     "not ready to generate",
     "ready to generate false",
@@ -230,7 +242,7 @@ function nextActionFrom({ readinessKey, lifecycleKey, blockers, sequence, flags,
   if (["not_ready", "no_sequence"].includes(readinessKey)) return { key: "not_ready", label: "Resolve readiness blockers before generation" };
   if (lifecycleKey === "failed") return { key: "investigate_failure", label: "Investigate provider/send failure" };
   if (["submitted", "import_pending"].includes(lifecycleKey)) return { key: "wait_provider", label: "Wait for provider sync/reconciliation" };
-  if (flags.launchReady && configured.launch) return { key: "launch", label: "Launch Saleshandy" };
+  if (flags.launchReady && configured.launch) return { key: "launch", label: "Export to Instantly" };
   if (flags.launchReady && !configured.launch) return { key: "configure_launch", label: "Configure guarded launch endpoint" };
   if (sequence) return { key: "monitor", label: "Monitor Saleshandy lifecycle and engagement" };
   return { key: "blocked", label: "Missing outreach source data" };
@@ -254,7 +266,8 @@ function buildJourney({ readinessKey, lifecycleKey, flags, sequence, generateEli
 function generateBlockersFrom({ email, sequence, blockers = [], lifecycleKey }) {
   const generateBlockers = [];
   if (!email) pushUnique(generateBlockers, "missing recipient email");
-  if (sequence) pushUnique(generateBlockers, "existing sequence");
+  const failedDraft = isNoEnviableFailedDraft(sequence);
+  if (sequence && !failedDraft) pushUnique(generateBlockers, "existing sequence");
   if (["suppressed", "submitted", "import_pending", "imported", "sent", "opened", "clicked", "replied"].includes(lifecycleKey)) {
     pushUnique(generateBlockers, `existing lifecycle ${lifecycleKey}`);
   }
@@ -274,18 +287,18 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
   const activeSuppression = suppression && suppression.active !== false ? suppression : null;
   if (activeSuppression) blockers.push("active suppression");
 
+  const failedDraft = isNoEnviableFailedDraft(sequence);
   const backendBlockers = readModel?.blockers || lead?.outreach_blockers || sequence?.blockers || sequence?.readiness_blockers;
   if (Array.isArray(backendBlockers)) {
     for (const blocker of backendBlockers) {
       const message = typeof blocker === "string" ? blocker : blocker?.message || blocker?.reason || JSON.stringify(blocker);
-      if (isReadinessWarning(message) && !isGenerateHardBlocker(message)) pushUnique(warnings, message);
+      if (isMissingToolUrl(message)) continue;
+      if (failedDraft && normalizedMessage(message).includes("existing sequence")) pushUnique(warnings, message);
+      else if (isReadinessWarning(message) && !isGenerateHardBlocker(message)) pushUnique(warnings, message);
       else pushUnique(blockers, message);
     }
   }
   if (!email) pushUnique(blockers, "missing recipient email");
-  if (sequence && !toolUrl) {
-    pushUnique(warnings, "missing tool URL — ok for copy review and current no-link launch strategy");
-  }
   const sendStatus = normalize(send?.status || send?.send_status);
   const providerImportStatus = normalize(send?.provider_import_status || send?.import_status);
   if ([sendStatus, providerImportStatus].some((value) => ["failed", "error", "bounced", "rejected"].includes(value))) blockers.push("provider/send failure");
