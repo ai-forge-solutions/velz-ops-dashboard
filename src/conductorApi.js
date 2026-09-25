@@ -12,6 +12,9 @@ export const OUTREACH_DEFAULT_ACTION_PATHS = {
   approve: "/outreach/sequences/{sequence_id}/approve",
   reject: "/outreach/sequences/{sequence_id}/reject",
   editDraft: "/outreach/sequences/{sequence_id}/draft-fields",
+  setSequenceStatus: "/outreach/sequences/{sequence_id}/status",
+  archiveLead: "/outreach/leads/{lead_id}/archive",
+  archiveBrandGroup: "/outreach/brand-groups/{group_id}/archive",
   launch: "/outreach/sequences/{sequence_id}/launch-instantly",
 };
 
@@ -20,6 +23,9 @@ const OUTREACH_ACTION_ENV_KEYS = {
   approve: ["VITE_OUTREACH_APPROVE_SEQUENCE_PATH"],
   reject: ["VITE_OUTREACH_REJECT_SEQUENCE_PATH"],
   editDraft: ["VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH"],
+  setSequenceStatus: ["VITE_OUTREACH_SET_SEQUENCE_STATUS_PATH"],
+  archiveLead: ["VITE_OUTREACH_ARCHIVE_LEAD_PATH"],
+  archiveBrandGroup: ["VITE_OUTREACH_ARCHIVE_BRAND_GROUP_PATH"],
   launch: ["VITE_OUTREACH_LAUNCH_INSTANTLY_PATH", "VITE_OUTREACH_LAUNCH_SALESHANDY_PATH"],
 };
 
@@ -144,14 +150,17 @@ async function conductorGet(path) {
   return conductorRequest(path, { method: "GET" });
 }
 
-function interpolateOutreachPath(path, { leadId, sequenceId }) {
+function interpolateOutreachPath(path, { leadId, sequenceId, groupId }) {
   return path
     .replace(/:leadId/g, encodeURIComponent(leadId || ""))
     .replace(/\{lead_id\}/g, encodeURIComponent(leadId || ""))
     .replace(/\{leadId\}/g, encodeURIComponent(leadId || ""))
     .replace(/:sequenceId/g, encodeURIComponent(sequenceId || ""))
     .replace(/\{sequence_id\}/g, encodeURIComponent(sequenceId || ""))
-    .replace(/\{sequenceId\}/g, encodeURIComponent(sequenceId || ""));
+    .replace(/\{sequenceId\}/g, encodeURIComponent(sequenceId || ""))
+    .replace(/:groupId/g, encodeURIComponent(groupId || ""))
+    .replace(/\{group_id\}/g, encodeURIComponent(groupId || ""))
+    .replace(/\{groupId\}/g, encodeURIComponent(groupId || ""));
 }
 
 function isIdempotentSequenceExistsPayload(payload) {
@@ -171,22 +180,23 @@ function idempotentSequenceExistsResult(payload) {
   };
 }
 
-export function buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId } = {}) {
+export function buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId, groupId } = {}) {
   const path = outreachActionPath(action);
   if (!baseUrl || !path) return null;
   if (path.match(/(:leadId|\{lead_?id\})/) && !leadId) throw new Error(`Falta lead_id para Outreach ${action}.`);
   if (path.match(/(:sequenceId|\{sequence_?id\})/) && !sequenceId) throw new Error(`Falta sequence_id para Outreach ${action}.`);
-  return `${baseUrl.replace(/\/$/, "")}${interpolateOutreachPath(path, { leadId, sequenceId })}`;
+  if (path.match(/(:groupId|\{group_?id\})/) && !groupId) throw new Error(`Falta group_id para Outreach ${action}.`);
+  return `${baseUrl.replace(/\/$/, "")}${interpolateOutreachPath(path, { leadId, sequenceId, groupId })}`;
 }
 
-async function outreachRequest(action, { leadId, sequenceId, body = {}, method = "POST" }) {
+async function outreachRequest(action, { leadId, sequenceId, groupId, body = {}, method = "POST" }) {
   const baseUrl = outreachApiBaseUrl();
   const path = outreachActionPath(action);
   if (!baseUrl || !path) {
     throw new Error(`Endpoint Outreach ${action} no configurado. Define VITE_OUTREACH_API_BASE_URL; las rutas reales de Outreach tienen defaults seguros.`);
   }
 
-  const response = await fetch(buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId }), {
+  const response = await fetch(buildOutreachActionUrl(baseUrl, action, { leadId, sequenceId, groupId }), {
     method,
     headers: {
       Accept: "application/json",
@@ -297,6 +307,9 @@ export function outreachActionConfiguredMap() {
     approve: outreachActionConfigured("approve"),
     reject: outreachActionConfigured("reject"),
     editDraft: outreachActionConfigured("editDraft"),
+    setSequenceStatus: outreachActionConfigured("setSequenceStatus"),
+    archiveLead: outreachActionConfigured("archiveLead"),
+    archiveBrandGroup: outreachActionConfigured("archiveBrandGroup"),
     launch: outreachActionConfigured("launch"),
   };
 }
@@ -340,6 +353,40 @@ export async function editOutreachSequenceDraft(sequenceId, draftPayload) {
   return outreachPatch("editDraft", {
     sequenceId,
     body: draftPayload,
+  });
+}
+
+export async function setOutreachSequenceStatus(sequenceId, status, notes = "") {
+  return outreachPatch("setSequenceStatus", {
+    sequenceId,
+    body: {
+      status,
+      updated_by: "miguel",
+      ...(notes ? { notes } : {}),
+    },
+  });
+}
+
+export async function setLeadArchived(leadId, archived, reason = "") {
+  return outreachPatch("archiveLead", {
+    leadId,
+    body: {
+      archived: Boolean(archived),
+      updated_by: "miguel",
+      ...(reason ? { reason } : {}),
+    },
+  });
+}
+
+export async function setBrandGroupArchived(groupId, archived, reason = "") {
+  return outreachPatch("archiveBrandGroup", {
+    groupId,
+    body: {
+      archived: Boolean(archived),
+      updated_by: "miguel",
+      ...(reason ? { reason } : {}),
+      cascade_leads: true,
+    },
   });
 }
 

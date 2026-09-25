@@ -5,6 +5,7 @@ const READINESS_LABELS = {
   not_ready: "Not ready",
   ready_to_generate: "Ready to generate",
   no_sequence: "Not ready",
+  no_enviable: "No enviable",
   draft: "Draft pending review",
   pending_review: "Draft pending review",
   approved: "Approved",
@@ -98,6 +99,7 @@ function isGenerateHardBlocker(value) {
     "missing recipient email",
     "recipient email missing",
     "no recipient email",
+    "lead archived",
     "sequence exists",
     "existing sequence",
     "sequence already exists",
@@ -110,11 +112,37 @@ function isNoEnviableFailedDraft(sequence) {
   if (!sequence) return false;
   const metadata = pickMetadata(sequence);
   const subject = normalize(sequence.subject);
+  const status = normalize(sequence.status || sequence.readiness_status);
   const review = normalize(sequence.review_status || metadata.review_status);
   const stage = metadata.no_enviable_stage;
   const reasons = metadata.motivo_no_enviable || sequence.not_ready_reasons || [];
   const hasNoEnviableReason = Array.isArray(reasons) ? reasons.length > 0 : Boolean(reasons);
-  return subject === "no_enviable" || review === "not_ready" && (Boolean(stage) || hasNoEnviableReason);
+  return status === "no_enviable" || subject === "no_enviable" || review === "not_ready" && (Boolean(stage) || hasNoEnviableReason);
+}
+
+export function isNoEnviableSequence(sequence) {
+  return isNoEnviableFailedDraft(sequence);
+}
+
+function flattenReason(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.flatMap(flattenReason);
+  if (typeof value === "object") return [value.message || value.reason || value.code || JSON.stringify(value)];
+  return [String(value)];
+}
+
+export function noEnviableReasons(sequence) {
+  const metadata = pickMetadata(sequence);
+  return [
+    ...flattenReason(metadata.motivo_no_enviable),
+    ...flattenReason(metadata.not_ready_reasons),
+    ...flattenReason(sequence?.not_ready_reasons),
+    ...flattenReason(metadata.no_enviable_stage ? `stage: ${metadata.no_enviable_stage}` : null),
+  ].filter(Boolean);
+}
+
+export function isArchivedLead(lead) {
+  return Boolean(lead?.archived_at || lead?.archivedAt);
 }
 
 function isReadinessWarning(value) {
@@ -186,6 +214,7 @@ function readinessFrom({ lead, sequence, suppression, blockers, readModel }) {
 
   if (["ready_to_generate", "ready-to-generate", "ready_generate", "generate_ready"].includes(explicit)) return "ready_to_generate";
   if (!sequence && ["ready", "approved"].includes(explicit)) return "ready_to_generate";
+  if (["no_enviable", "no-enviable"].includes(explicit) || isNoEnviableFailedDraft(sequence)) return "no_enviable";
   if (["not_ready", "not-ready", "missing_inputs", "degraded", "needs_enrichment"].includes(explicit)) return "not_ready";
   if (["launch_ready", "ready_to_launch", "approved_ready_to_launch"].includes(explicit)) return "launch_ready";
 
@@ -286,6 +315,8 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
   const toolUrl = publicToolUrl(sequence, lead);
   const activeSuppression = suppression && suppression.active !== false ? suppression : null;
   if (activeSuppression) blockers.push("active suppression");
+  const archived = isArchivedLead(lead);
+  if (archived) blockers.push("lead archived");
 
   const failedDraft = isNoEnviableFailedDraft(sequence);
   const backendBlockers = readModel?.blockers || lead?.outreach_blockers || sequence?.blockers || sequence?.readiness_blockers;
@@ -314,6 +345,10 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
     generate: Boolean(actionConfigured.generate),
     approve: Boolean(actionConfigured.approve),
     reject: Boolean(actionConfigured.reject),
+    editDraft: Boolean(actionConfigured.editDraft),
+    setSequenceStatus: Boolean(actionConfigured.setSequenceStatus),
+    archiveLead: Boolean(actionConfigured.archiveLead),
+    archiveBrandGroup: Boolean(actionConfigured.archiveBrandGroup),
     launch: Boolean(actionConfigured.launch ?? launchConfigured),
   };
   const generateBlockers = generateBlockersFrom({ email, sequence, blockers, lifecycleKey });
@@ -344,9 +379,20 @@ export function deriveOutreachStatus({ leadId, lead, sequence, send, events = []
     readyToGenerate: flags.readyToGenerate || readinessKey === "ready_to_generate",
     generateEligible,
     generateBlockers,
-    canApprove: flags.canApprove || readinessKey === "pending_review",
-    canReject: flags.canReject || readinessKey === "pending_review",
-    launchEligible: flags.launchReady && !["submitted", "import_pending", "imported", "sent", "opened", "clicked", "replied", "failed", "suppressed"].includes(lifecycleKey),
+    noEnviable: failedDraft,
+    noEnviableReasons: noEnviableReasons(sequence),
+    archived,
+    archive: {
+      archived,
+      archivedAt: lead?.archived_at || lead?.archivedAt || null,
+      archivedBy: lead?.archived_by || lead?.archivedBy || null,
+      reason: lead?.archive_reason || lead?.archiveReason || null,
+      source: lead?.archive_source || lead?.archiveSource || null,
+      sourceId: lead?.archive_source_id || lead?.archiveSourceId || null,
+    },
+    canApprove: !failedDraft && !archived && (flags.canApprove || readinessKey === "pending_review"),
+    canReject: !archived && (flags.canReject || readinessKey === "pending_review"),
+    launchEligible: !failedDraft && !archived && flags.launchReady && !["submitted", "import_pending", "imported", "sent", "opened", "clicked", "replied", "failed", "suppressed"].includes(lifecycleKey),
     actionConfigured: configured,
     journey: buildJourney({ readinessKey, lifecycleKey, flags, sequence, generateEligible }),
     nextAction: nextActionFrom({ readinessKey, lifecycleKey, blockers, sequence, flags, configured, generateEligible }),
@@ -363,7 +409,7 @@ export function deriveOutreachFilters(outreach) {
   if (launched) filters.push("launched");
   if (["submitted", "import_pending"].includes(outreach.lifecycle?.key)) filters.push("provider_pending");
   if (["opened", "clicked", "replied"].includes(outreach.lifecycle?.key) || Object.keys(outreach.magnetEvents?.counts || {}).length > 0) filters.push("engaged");
-  if (["blocked", "failed"].includes(outreach.readiness?.key) || outreach.lifecycle?.key === "failed") filters.push("failed_blocked");
+  if (["blocked", "failed", "no_enviable"].includes(outreach.readiness?.key) || outreach.lifecycle?.key === "failed") filters.push("failed_blocked");
   if (outreach.lifecycle?.key === "suppressed") filters.push("suppressed");
   return filters;
 }
