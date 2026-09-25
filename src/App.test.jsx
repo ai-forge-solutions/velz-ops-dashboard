@@ -12,6 +12,7 @@ const mockGetMetaAdLibraryRun = vi.fn();
 const mockGenerateOutreachSequence = vi.fn();
 const mockPreviewProcess = vi.fn();
 const mockSetBrandGroupArchived = vi.fn();
+const mockSetLeadArchived = vi.fn();
 
 vi.mock("./supabaseData", () => ({
   loadDashboardBrands: mockLoadDashboardBrands,
@@ -31,6 +32,7 @@ vi.mock("./conductorApi", async () => {
     getProcessRun: vi.fn(),
     previewProcess: mockPreviewProcess,
     setBrandGroupArchived: mockSetBrandGroupArchived,
+    setLeadArchived: mockSetLeadArchived,
     runProcess: vi.fn(),
     executeProcess: vi.fn(),
   };
@@ -141,7 +143,8 @@ beforeEach(() => {
   });
   mockGetMetaAdLibraryRun.mockResolvedValue({});
   mockGenerateOutreachSequence.mockResolvedValue({ message: "Drafting completado.", sequence: generatedSequence });
-  mockSetBrandGroupArchived.mockResolvedValue({ affected_leads: 2 });
+  mockSetBrandGroupArchived.mockResolvedValue({ affected_lead_count: 2 });
+  mockSetLeadArchived.mockResolvedValue({ ok: true });
 });
 
 describe("Brand group MVP", () => {
@@ -279,6 +282,21 @@ describe("Brand group MVP", () => {
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("archivará sus leads miembro individualmente"));
     expect(mockSetBrandGroupArchived).toHaveBeenCalledWith("group-qa", true, "Archived group from Velz Ops Dashboard.");
     await waitFor(() => expect(screen.getByText(/2 leads afectados/i)).toBeTruthy());
+  });
+
+  it("archives selected brands individually through Outreach API", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {}, outreach: readyToGenerateOutreach }]);
+
+    await renderLoadedApp();
+    const table = screen.getByRole("table");
+    await user.click(within(table).getAllByRole("checkbox")[0]);
+    await user.click(screen.getByRole("button", { name: /Archivar selección/i }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Archivar 1 lead seleccionado"));
+    expect(mockSetLeadArchived).toHaveBeenCalledWith("lead-1", true, "Archived selected lead from Velz Ops Dashboard.");
+    await waitFor(() => expect(screen.getByText(/1 lead archivado/i)).toBeTruthy());
   });
 });
 
