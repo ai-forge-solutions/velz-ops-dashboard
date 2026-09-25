@@ -17,6 +17,7 @@ import {
   runConductorService,
   runProcess,
   setBrandGroupArchived,
+  setLeadArchived,
 } from "./conductorApi";
 import { sequenceIdFor } from "./sequenceDraftEditor";
 import BrandDrawer from "./BrandDrawer";
@@ -679,10 +680,36 @@ export default function App() {
       const result = await setBrandGroupArchived(activeGroup.id, !archived, archived ? "Unarchived group from Velz Ops Dashboard." : "Archived group from Velz Ops Dashboard.");
       await refreshDashboardBrands({ showLoading: true });
       if (!archived) setActiveGroupId("");
-      const affected = result?.affected_leads ?? result?.lead_count ?? result?.updated_leads ?? result?.archived_leads ?? result?.unarchived_leads;
+      const affected = result?.affected_lead_count ?? result?.affected_leads ?? result?.lead_count ?? result?.updated_leads ?? result?.archived_leads ?? result?.unarchived_leads;
       setActionMessage({ tone: "success", text: `Grupo “${activeGroup.name}” ${archived ? "desarchivado" : "archivado"}${affected != null ? ` · ${affected} leads afectados` : ""}.` });
     } catch (error) {
       setActionMessage({ tone: "error", text: `No se pudo ${verb} el grupo: ${error.message}` });
+    }
+  }
+
+  async function handleArchiveSelectedBrands(archived) {
+    const selectedBrands = filtered.filter((brand) => selected.has(brand.id));
+    const leadIds = selectedBrands.map((brand) => brand.outreach?.leadId).filter(Boolean);
+    if (leadIds.length === 0) {
+      setActionMessage({ tone: "warning", text: "Las marcas seleccionadas no tienen lead_id de Outreach para archivar." });
+      return;
+    }
+    const verb = archived ? "archivar" : "desarchivar";
+    const skipped = selectedBrands.length - leadIds.length;
+    const copy = archived
+      ? `¿Archivar ${leadIds.length} lead${leadIds.length === 1 ? "" : "s"} seleccionado${leadIds.length === 1 ? "" : "s"}? Se ocultarán de la operativa normal y el backend bloqueará envíos.`
+      : `¿Desarchivar ${leadIds.length} lead${leadIds.length === 1 ? "" : "s"} seleccionado${leadIds.length === 1 ? "" : "s"}? Volverán a aparecer en sus grupos originales.`;
+    if (!window.confirm(copy)) return;
+    try {
+      await Promise.all(leadIds.map((leadId) => setLeadArchived(leadId, archived, archived ? "Archived selected lead from Velz Ops Dashboard." : "Unarchived selected lead from Velz Ops Dashboard.")));
+      await refreshDashboardBrands({ showLoading: true });
+      setSelected(new Set());
+      setActionMessage({
+        tone: "success",
+        text: `${leadIds.length} lead${leadIds.length === 1 ? "" : "s"} ${archived ? "archivado" : "desarchivado"}${leadIds.length === 1 ? "" : "s"}${skipped > 0 ? ` · ${skipped} sin lead_id omitido${skipped === 1 ? "" : "s"}` : ""}.`,
+      });
+    } catch (error) {
+      setActionMessage({ tone: "error", text: `No se pudo ${verb} la selección: ${error.message}` });
     }
   }
 
@@ -746,6 +773,7 @@ export default function App() {
           onUpdateGroup={handleUpdateActiveGroup}
           onDeleteGroup={handleDeleteActiveGroup}
           onArchiveGroup={handleArchiveActiveGroup}
+          onArchiveSelected={handleArchiveSelectedBrands}
           onSelectVisible={selectVisibleBrands}
           onClearSelection={clearSelection}
           onExportSequences={exportSelectedSequences}
@@ -777,7 +805,7 @@ export default function App() {
 }
 
 // ---------------------------------------------------------------------------
-function RunsView({ brands, search, setSearch, showArchived, setShowArchived, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer, brandGroups, activeGroupId, setActiveGroupId, groupName, setGroupName, onCreateGroup, onUpdateGroup, onDeleteGroup, onArchiveGroup, onSelectVisible, onClearSelection, onExportSequences }) {
+function RunsView({ brands, search, setSearch, showArchived, setShowArchived, loading, error, actionMessage, clearActionMessage, selected, toggleRow, triggerService, triggerPipeline, triggerBulk, popover, setPopover, popRef, openBrandDrawer, brandGroups, activeGroupId, setActiveGroupId, groupName, setGroupName, onCreateGroup, onUpdateGroup, onDeleteGroup, onArchiveGroup, onArchiveSelected, onSelectVisible, onClearSelection, onExportSequences }) {
   const activeGroup = brandGroups.find((group) => group.id === activeGroupId) || null;
   return (
     <div className="px-4 py-4 sm:px-6 sm:py-5">
@@ -838,6 +866,14 @@ function RunsView({ brands, search, setSearch, showArchived, setShowArchived, lo
             <button type="button" onClick={() => onExportSequences("md")} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
               Exportar .md
             </button>
+            <button type="button" onClick={() => onArchiveSelected(true)} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.amber}`, color: COLORS.amber }}>
+              Archivar selección
+            </button>
+            {showArchived && (
+              <button type="button" onClick={() => onArchiveSelected(false)} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.green}`, color: COLORS.green }}>
+                Desarchivar selección
+              </button>
+            )}
             <BulkTrigger onTrigger={triggerBulk} />
           </div>
         )}
