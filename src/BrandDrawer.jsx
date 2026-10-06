@@ -19,6 +19,7 @@ import { loadBrandSource, loadLeadMagnetTools, setLeadMagnetToolKey } from "./su
 import { assignmentDisplay, groupToolsBySegment, isToolSelectionDirty, toolOptionLabel } from "./leadToolCatalog";
 import {
   approveOutreachSequence,
+  createManualOutreachSequenceDraft,
   editOutreachSequenceDraft,
   generateOutreachSequence,
   launchSaleshandyQaBulk,
@@ -527,6 +528,9 @@ function OutreachSection({ brand, onRefresh }) {
                 </button>
                 {displayedSequence && !sequenceIsEditing && (
                   <button type="button" onClick={() => dispatchSequenceEditor({ type: "edit", sequence: displayedSequence })} disabled={!sequenceEditable.editable || noEnviable} title={noEnviable ? "No editable mientras está marcado No enviable; reactiva a draft primero." : sequenceEditable.reason || "Edit sequence draft"} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: sequenceEditable.editable && !noEnviable ? COLORS.ink : COLORS.muted }}><Pencil size={13} /> Edit draft</button>
+                )}
+                {!displayedSequence && outreach.leadId && (
+                  <button type="button" onClick={() => runAction("manualDraft", () => createManualOutreachSequenceDraft(outreach.leadId))} disabled={!actionConfigured.generate || busyAction} title={actionConfigured.generate ? "Crea una secuencia editable sin llamar al generador" : "Draft manual no configurado: falta VITE_OUTREACH_API_BASE_URL."} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: actionConfigured.generate ? COLORS.ink : COLORS.muted }}><Pencil size={13} /> Crear draft manual</button>
                 )}
                 {sequenceId && !noEnviable && (
                   <button type="button" onClick={() => runAction("no_enviable", () => setOutreachSequenceStatus(sequenceId, "no_enviable", "Marked no_enviable from Velz Ops Dashboard."))} disabled={busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.amber}`, color: COLORS.amber }}>

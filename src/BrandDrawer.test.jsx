@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 const mockLoadBrandSource = vi.fn();
 const mockSetLeadMagnetToolKey = vi.fn();
 const mockGenerateOutreachSequence = vi.fn();
+const mockCreateManualOutreachSequenceDraft = vi.fn();
 const mockSetLeadArchived = vi.fn();
 const mockSetOutreachSequenceStatus = vi.fn();
 
@@ -17,6 +18,7 @@ vi.mock("./supabaseData", () => ({
 
 vi.mock("./conductorApi", () => ({
   approveOutreachSequence: vi.fn(),
+  createManualOutreachSequenceDraft: mockCreateManualOutreachSequenceDraft,
   editOutreachSequenceDraft: vi.fn(),
   generateOutreachSequence: mockGenerateOutreachSequence,
   launchSaleshandyQaBulk: vi.fn(),
@@ -92,6 +94,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockLoadBrandSource.mockResolvedValue([]);
   mockSetLeadMagnetToolKey.mockResolvedValue({});
+  mockCreateManualOutreachSequenceDraft.mockResolvedValue({ message: "manual draft", sequence: { id: "seq-manual-1", lead_id: "lead-1", send_status: "not_scheduled" } });
   mockGenerateOutreachSequence.mockResolvedValue({ message: "generated", sequence: { id: "seq-1", lead_id: "lead-1" } });
   mockSetLeadArchived.mockResolvedValue({ ok: true });
   mockSetOutreachSequenceStatus.mockResolvedValue({ ok: true });
@@ -196,6 +199,19 @@ describe("BrandDrawer dashboard optimizations", () => {
     await user.click(within(reviewSection).getByRole("button", { name: /^Generate$/i }));
 
     expect(mockGenerateOutreachSequence).toHaveBeenCalledWith("lead-1");
+    expect(onRefresh).toHaveBeenCalled();
+  });
+
+  it("can seed a manual editable sequence draft when no generated sequence exists", async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn();
+
+    await renderDrawer({ onRefresh });
+
+    const reviewSection = screen.getByText("Sequence draft / review").closest("section");
+    await user.click(within(reviewSection).getByRole("button", { name: /Crear draft manual/i }));
+
+    expect(mockCreateManualOutreachSequenceDraft).toHaveBeenCalledWith("lead-1");
     expect(onRefresh).toHaveBeenCalled();
   });
 
