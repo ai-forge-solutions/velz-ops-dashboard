@@ -19,6 +19,7 @@ const qaLeadId = "4768fa1e-21f7-4ff3-a82d-639deec5c4dd";
 
 assert.deepEqual(OUTREACH_DEFAULT_ACTION_PATHS, {
   generate: "/outreach/leads/{lead_id}/sequences/generate",
+  manualDraft: "/outreach/leads/{lead_id}/sequences/manual-draft",
   approve: "/outreach/sequences/{sequence_id}/approve",
   reject: "/outreach/sequences/{sequence_id}/reject",
   editDraft: "/outreach/sequences/{sequence_id}/draft-fields",
@@ -30,6 +31,10 @@ assert.deepEqual(OUTREACH_DEFAULT_ACTION_PATHS, {
 assert.equal(
   buildOutreachActionUrl("https://outreach.example.com/", "generate", { leadId: "lead 1" }),
   "https://outreach.example.com/outreach/leads/lead%201/sequences/generate",
+);
+assert.equal(
+  buildOutreachActionUrl("https://outreach.example.com/", "manualDraft", { leadId: "lead 1" }),
+  "https://outreach.example.com/outreach/leads/lead%201/sequences/manual-draft",
 );
 assert.equal(
   buildOutreachActionUrl("https://outreach.example.com", "approve", { sequenceId: "seq/1" }),
