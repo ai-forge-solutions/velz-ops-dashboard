@@ -3,7 +3,7 @@ import {
   Check, X, Loader2, Clock, AlertTriangle, Minus, Play, Search,
   ChevronDown, Plus, Trash2, PlayCircle, Users, ChevronRight, Info, RotateCcw
 } from "lucide-react";
-import { deleteBrandGroup, loadBrandGroups, loadDashboardBrands, saveBrandGroup } from "./supabaseData";
+import { deleteBrandGroup, loadBrandGroups, loadDashboardBrands, loadRecentProcessRuns, saveBrandGroup } from "./supabaseData";
 import {
   conductorServiceAvailable,
   executeProcess,
@@ -106,7 +106,9 @@ function normalizeProcessRunHistoryEntry(input = {}) {
       ? input.steps.map((step) => typeof step === "string" ? step : step?.id).filter(Boolean)
       : Array.isArray(input.payload?.steps)
         ? input.payload.steps.map((step) => step?.id).filter(Boolean)
-        : [],
+        : Array.isArray(input.request_payload?.steps)
+          ? input.request_payload.steps.map((step) => step?.id).filter(Boolean)
+          : [],
   };
 }
 
@@ -1334,6 +1336,8 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
   const [processRunInput, setProcessRunInput] = useState(() => new URLSearchParams(window.location.search).get("process_run_id") || "");
   const [processRunDetail, setProcessRunDetail] = useState(null);
   const [processRunHistory, setProcessRunHistory] = useState(loadProcessRunHistory);
+  const [loadingProcessHistory, setLoadingProcessHistory] = useState(false);
+  const [processHistoryError, setProcessHistoryError] = useState(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -1375,6 +1379,28 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
         window.localStorage.setItem(PROCESS_RUN_HISTORY_KEY, JSON.stringify(next));
       } catch (error) {
         // Browser storage can be unavailable in private mode; the in-memory dropdown still works.
+      }
+      return next;
+    });
+  }
+
+
+  function mergeProcessRunHistory(entries) {
+    const normalizedEntries = (entries || []).map(normalizeProcessRunHistoryEntry).filter(Boolean);
+    if (normalizedEntries.length === 0) return;
+    setProcessRunHistory((current) => {
+      const byId = new Map();
+      for (const entry of [...normalizedEntries, ...current]) {
+        if (!entry?.id || byId.has(entry.id)) continue;
+        byId.set(entry.id, entry);
+      }
+      const next = Array.from(byId.values())
+        .sort((a, b) => new Date(b.createdAt || b.lastSeenAt || 0).getTime() - new Date(a.createdAt || a.lastSeenAt || 0).getTime())
+        .slice(0, MAX_PROCESS_RUN_HISTORY);
+      try {
+        window.localStorage.setItem(PROCESS_RUN_HISTORY_KEY, JSON.stringify(next));
+      } catch (error) {
+        // Keep the loaded dropdown in memory if browser storage is unavailable.
       }
       return next;
     });
@@ -1476,6 +1502,25 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
     rememberProcessRunId(processRunId);
     await refreshProcessRun(processRunId);
   }
+
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadStoredProcessRuns() {
+      setLoadingProcessHistory(true);
+      setProcessHistoryError(null);
+      try {
+        const rows = await loadRecentProcessRuns({ limit: MAX_PROCESS_RUN_HISTORY });
+        if (!cancelled) mergeProcessRunHistory(rows);
+      } catch (error) {
+        if (!cancelled) setProcessHistoryError(error);
+      } finally {
+        if (!cancelled) setLoadingProcessHistory(false);
+      }
+    }
+    loadStoredProcessRuns();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!activeProcessRunId) return undefined;
@@ -1681,7 +1726,7 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
               className="w-full rounded px-2 py-1 text-[11px]"
               style={{ border: `1px solid ${COLORS.line}`, color: processRunHistory.length ? COLORS.ink : COLORS.muted }}
             >
-              <option value="">{processRunHistory.length ? "Selecciona un proceso reciente…" : "Sin procesos recientes en este navegador"}</option>
+              <option value="">{loadingProcessHistory ? "Cargando procesos recientes…" : processRunHistory.length ? "Selecciona un proceso reciente…" : "Sin procesos recientes"}</option>
               {processRunHistory.map((entry) => (
                 <option key={entry.id} value={entry.id}>{processRunHistoryLabel(entry)}</option>
               ))}
@@ -1691,6 +1736,7 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
               <button type="submit" className="rounded px-2 py-1 font-medium" style={{ background: COLORS.ink, color: "#fff" }}>Cargar</button>
             </form>
           </div>
+          {processHistoryError && <p className="mb-2" style={{ color: COLORS.amber }}>No se pudo cargar el historial de procesos: {processHistoryError.message}</p>}
           {processRunId && <p className="mb-2">proceso: <span>{processRunHistoryLabel(normalizeProcessRunHistoryEntry(processRunDetail || processRunHistory.find((entry) => entry.id === processRunId) || { id: processRunId }))}</span></p>}
           {!processRunDetail && <p style={{ color: COLORS.muted }}>Crea un proceso, elige uno reciente o pega un process_run_id existente para ver historial/progreso.</p>}
           {processRunDetail && (
