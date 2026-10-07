@@ -109,6 +109,17 @@ const LEAD_MAGNET_ASSIGNMENT_FIELDS = [
   "assignment_source",
 ].join(",");
 
+
+const PROCESS_RUN_FIELDS = [
+  "id",
+  "status",
+  "request_payload",
+  "brand_count",
+  "item_count",
+  "created_at",
+  "updated_at",
+].join(",");
+
 const BRAND_GROUP_FIELDS = [
   "id",
   "name",
@@ -429,6 +440,26 @@ function toBrandGroup(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+
+export async function loadRecentProcessRuns({ limit = 20 } = {}) {
+  const params = new URLSearchParams({
+    select: PROCESS_RUN_FIELDS,
+    order: "created_at.desc",
+    limit: String(limit),
+  });
+  const rows = await supabaseRest("process_runs", params);
+  return rows.map((row) => ({
+    id: row.id,
+    status: row.status,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    brand_count: row.brand_count,
+    item_count: row.item_count,
+    request_payload: row.request_payload,
+    steps: Array.isArray(row.request_payload?.steps) ? row.request_payload.steps : [],
+  }));
 }
 
 export async function loadBrandGroups() {
