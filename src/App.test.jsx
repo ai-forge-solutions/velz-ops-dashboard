@@ -11,6 +11,9 @@ const mockRunConductorService = vi.fn();
 const mockGetMetaAdLibraryRun = vi.fn();
 const mockGenerateOutreachSequence = vi.fn();
 const mockPreviewProcess = vi.fn();
+const mockRunProcess = vi.fn();
+const mockExecuteProcess = vi.fn();
+const mockGetProcessRun = vi.fn();
 const mockSetBrandGroupArchived = vi.fn();
 const mockSetLeadArchived = vi.fn();
 
@@ -29,12 +32,12 @@ vi.mock("./conductorApi", async () => {
     generateOutreachSequence: mockGenerateOutreachSequence,
     runConductorPipeline: vi.fn(),
     getMetaAdLibraryRun: mockGetMetaAdLibraryRun,
-    getProcessRun: vi.fn(),
+    getProcessRun: mockGetProcessRun,
     previewProcess: mockPreviewProcess,
     setBrandGroupArchived: mockSetBrandGroupArchived,
     setLeadArchived: mockSetLeadArchived,
-    runProcess: vi.fn(),
-    executeProcess: vi.fn(),
+    runProcess: mockRunProcess,
+    executeProcess: mockExecuteProcess,
   };
 });
 
@@ -126,6 +129,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   delete globalThis.__VELZ_RUNTIME_CONFIG__;
+  window.localStorage.clear();
 });
 
 beforeEach(() => {
@@ -135,6 +139,9 @@ beforeEach(() => {
   mockSaveBrandGroup.mockResolvedValue({ id: "group-1", name: "Grupo QA", description: "", brandCount: 1, brandIds: [brand.id] });
   mockDeleteBrandGroup.mockResolvedValue(undefined);
   mockPreviewProcess.mockResolvedValue({ brand_count: 1, total_items_estimated: 5 });
+  mockRunProcess.mockResolvedValue({ process_run_id: "run-new-123", status: "queued", created_at: "2026-10-07T10:15:00Z" });
+  mockExecuteProcess.mockResolvedValue({ status: "success", message: "ok" });
+  mockGetProcessRun.mockResolvedValue({ id: "run-new-123", status: "queued", brand_count: 1, item_count: 5, steps: ["brand_context"], items: [] });
   mockRunConductorService.mockResolvedValue({
     success: true,
     status: "success",
@@ -250,6 +257,33 @@ describe("Brand group MVP", () => {
     await waitFor(() => expect(mockPreviewProcess).toHaveBeenCalled());
     expect(mockPreviewProcess.mock.calls[0][0].brand_ids).toEqual([brand.id]);
     expect(screen.getByText("Preview real generado por el backend de procesos.")).toBeTruthy();
+  });
+
+  it("keeps recent process runs in a simple dropdown and loads one without retyping the ID", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("velz.processRunHistory.v1", JSON.stringify([
+      { id: "run-old-456", createdAt: "2026-10-07T09:30:00Z", status: "success", brandCount: 2, steps: ["brand_context", "email_generation"] },
+    ]));
+    mockGetProcessRun.mockResolvedValue({
+      id: "run-old-456",
+      status: "success",
+      brand_count: 2,
+      item_count: 4,
+      steps: ["brand_context", "email_generation"],
+      items: [],
+    });
+
+    await renderLoadedApp();
+    await user.click(screen.getByRole("button", { name: "Procesos" }));
+
+    const recentSelect = screen.getByRole("combobox", { name: /Procesos recientes/i });
+    expect(within(recentSelect).getByRole("option", { name: /7\/10.*2 marcas.*Contexto de marca \+ Drafting.*success.*#old-456/i })).toBeTruthy();
+
+    await user.selectOptions(recentSelect, "run-old-456");
+
+    await waitFor(() => expect(mockGetProcessRun).toHaveBeenCalledWith("run-old-456"));
+    expect(screen.getByText(/proceso:/i).textContent).toMatch(/2 marcas/);
+    expect(screen.getByText(/proceso:/i).textContent).not.toMatch(/process_run_id:/i);
   });
 
   it("hides archived leads by default and reveals them with the archived toggle", async () => {
