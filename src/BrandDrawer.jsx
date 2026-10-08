@@ -200,9 +200,9 @@ function JourneyIndicator({ steps = [] }) {
 }
 
 function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSave, noEnviable = false, noEnviableReasons = [] }) {
-  if (!sequence) return <EmptyState>No hay draft de secuencia source-backed para este lead todavía.</EmptyState>;
-  const followups = Array.isArray(sequence.followups) ? sequence.followups : [];
-  const isEditing = editor.mode === "edit" || editor.mode === "saving";
+  const isEditing = editableState.editable && !noEnviable;
+  if (!sequence && !isEditing) return <EmptyState>No hay draft de secuencia source-backed para este lead todavía.</EmptyState>;
+  const followups = Array.isArray(sequence?.followups) ? sequence.followups : [];
   const isSaving = editor.mode === "saving";
 
   if (noEnviable && !isEditing) {
@@ -254,8 +254,8 @@ function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSa
         </div>
         {editor.error && <EmptyState tone={COLORS.red}>Save failed: {editor.error.message}</EmptyState>}
         <div className="flex flex-wrap justify-end gap-2">
-          <button type="button" onClick={() => dispatchEditor({ type: "cancel", sequence })} disabled={isSaving} className="rounded px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}` }}>Cancel</button>
-          <button type="button" onClick={onSave} disabled={isSaving} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: COLORS.ink, color: "#fff" }}>{isSaving && <Loader2 size={13} className="animate-spin" />}{isSaving ? "Saving…" : "Save draft"}</button>
+          <button type="button" onClick={() => dispatchEditor({ type: "cancel", sequence })} disabled={isSaving} className="rounded px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}` }}>Descartar cambios</button>
+          <button type="button" onClick={onSave} disabled={isSaving} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: COLORS.ink, color: "#fff" }}>{isSaving ? "Guardando…" : "Guardar"}</button>
         </div>
       </div>
     );
@@ -477,6 +477,13 @@ function OutreachSection({ brand, onRefresh }) {
   const provider = outreach?.provider || {};
   const actionConfigured = outreach?.actionConfigured || {};
   const sequenceId = sequenceIdFor(sequence);
+  const createdSequenceId = useRef("");
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const [refreshError, setRefreshError] = useState(null);
   const [sequenceEditor, dispatchSequenceEditor] = useReducer(sequenceDraftReducer, {
     mode: "view",
     form: createSequenceDraftForm(sequence),
@@ -502,12 +509,14 @@ function OutreachSection({ brand, onRefresh }) {
   // edit gating must read the live runtime config directly on each render.
   const liveDiagnostics = outreachRuntimeDiagnostics();
   const editConfigured = Boolean(liveDiagnostics.editDraftConfigured);
-  const sequenceEditable = isSequenceDraftEditable({ sequence: displayedSequence, configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
+  const sequenceEditable = leadArchived
+    ? { editable: false, reason: "Lead archived: reactiva el lead antes de editar." }
+    : isSequenceDraftEditable({ sequence: displayedSequence || (outreach?.leadId && actionConfigured.generate ? { id: "unsaved" } : null), configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
   const sequenceIsEditing = sequenceEditor.mode === "edit" || sequenceEditor.mode === "saving";
 
   useEffect(() => {
-    dispatchSequenceEditor({ type: "cancel", sequence });
-  }, [sequenceId]);
+    dispatchSequenceEditor({ type: "sync", sequence });
+  }, [sequence]);
 
   useEffect(() => {
     setDiagnostics(liveDiagnostics);
@@ -525,20 +534,39 @@ function OutreachSection({ brand, onRefresh }) {
   }
 
   async function saveSequenceDraft() {
+    if (sequenceEditor.mode === "saving" || busyAction || !sequenceEditable.editable || noEnviable) return;
+    if (!sequenceEditor.form.subject.trim() || !sequenceEditor.form.initial_email.trim()) {
+      dispatchSequenceEditor({ type: "failed", error: new Error("Completa el asunto y el cuerpo antes de guardar.") });
+      return;
+    }
+    if (sequenceEditor.form.followups.some((followup) => !followup.body?.trim())) {
+      dispatchSequenceEditor({ type: "failed", error: new Error("Completa el cuerpo de cada followup o elimínalo antes de guardar.") });
+      return;
+    }
+    setRefreshError(null);
     dispatchSequenceEditor({ type: "saving" });
     try {
+      const savedSequenceId = sequenceIdFor(displayedSequence) || createdSequenceId.current || sequenceIdFor((await createManualOutreachSequenceDraft(outreach.leadId))?.sequence);
+      createdSequenceId.current = savedSequenceId;
       const result = await runSequenceDraftSave({
-        sequenceId,
+        sequenceId: savedSequenceId,
         form: sequenceEditor.form,
         save: editOutreachSequenceDraft,
-        refresh: onRefresh,
       });
+      if (!mounted.current) return;
       dispatchSequenceEditor({ type: "saved", result, sequence });
       setActionResult(result || { ok: true });
       setActionError(null);
     } catch (error) {
+      if (!mounted.current) return;
       dispatchSequenceEditor({ type: "failed", error });
       setActionError(error);
+      return;
+    }
+    try {
+      await onRefresh?.();
+    } catch (error) {
+      setRefreshError(error);
     }
   }
 
@@ -579,12 +607,6 @@ function OutreachSection({ brand, onRefresh }) {
                 <button onClick={() => runAction("generate", () => generateOutreachSequence(outreach.leadId))} disabled={!canGenerate || busyAction} title={generateBlockedTitle} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canGenerate ? COLORS.ink : COLORS.line, color: canGenerate ? "#fff" : COLORS.muted }}>
                   {busyAction === "generate" ? "Generating…" : "Generate"}
                 </button>
-                {displayedSequence && !sequenceIsEditing && (
-                  <button type="button" onClick={() => dispatchSequenceEditor({ type: "edit", sequence: displayedSequence })} disabled={!sequenceEditable.editable || noEnviable} title={noEnviable ? "No editable mientras está marcado No enviable; reactiva a draft primero." : sequenceEditable.reason || "Edit sequence draft"} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: sequenceEditable.editable && !noEnviable ? COLORS.ink : COLORS.muted }}><Pencil size={13} /> Edit draft</button>
-                )}
-                {!displayedSequence && outreach.leadId && (
-                  <button type="button" onClick={() => runAction("manualDraft", () => createManualOutreachSequenceDraft(outreach.leadId))} disabled={!actionConfigured.generate || busyAction} title={actionConfigured.generate ? "Crea una secuencia editable sin llamar al generador" : "Draft manual no configurado: falta VITE_OUTREACH_API_BASE_URL."} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: actionConfigured.generate ? COLORS.ink : COLORS.muted }}><Pencil size={13} /> Crear draft manual</button>
-                )}
                 {sequenceId && !noEnviable && (
                   <button type="button" onClick={() => runAction("no_enviable", () => setOutreachSequenceStatus(sequenceId, "no_enviable", "Marked no_enviable from Velz Ops Dashboard."))} disabled={busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.amber}`, color: COLORS.amber }}>
                     {busyAction === "no_enviable" ? "Marcando…" : "Marcar no enviable"}
@@ -608,6 +630,7 @@ function OutreachSection({ brand, onRefresh }) {
               noEnviable={noEnviable}
               noEnviableReasons={outreach.noEnviableReasons || []}
             />
+            {refreshError && <EmptyState tone={COLORS.amber}>Guardado correctamente, pero no se pudo actualizar el dashboard: {refreshError.message}</EmptyState>}
             <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
               <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
               <button onClick={() => runAction("reject", () => rejectOutreachSequence(sequenceId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
@@ -1279,7 +1302,7 @@ export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand
         </header>
 
         <main className="p-4 sm:p-6">
-          {!detailSource && <div className="mb-4"><OutreachSection brand={brand} onRefresh={onRefresh} /></div>}
+          {!detailSource && <div className="mb-4"><OutreachSection key={`${brand.id}:${brand.outreach?.leadId || ""}`} brand={brand} onRefresh={onRefresh} /></div>}
           {!hasRuns ? (
             <div className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: COLORS.wash }}>
               <p className="mb-4 text-sm">Aún no se ha ejecutado ningún servicio para esta marca. Estas fuentes siguen pendientes:</p>
