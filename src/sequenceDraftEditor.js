@@ -60,25 +60,27 @@ export function isSequenceDraftEditable({ sequence, configured, lifecycleKey, pr
   return { editable: true, reason: null };
 }
 
+export function reconcileSequenceDraft(confirmed, incoming) {
+  if (!confirmed) return incoming;
+  const incomingId = sequenceIdFor(incoming);
+  if (incomingId && incomingId !== sequenceIdFor(confirmed)) return incoming;
+  const caughtUp = incomingId && JSON.stringify(createSequenceDraftForm(incoming)) === JSON.stringify(createSequenceDraftForm(confirmed));
+  const version = (sequence) => Date.parse(sequence?.updated_at || sequence?.metadata?.last_edited_at || sequence?.reviewed_at || "");
+  if (caughtUp || version(incoming) > version(confirmed)) return incoming;
+  return confirmed;
+}
+
 export function sequenceDraftReducer(state, action) {
   switch (action.type) {
     case "sync": {
       if (state.dirty || state.mode === "saving") return state;
-      const confirmed = state.result?.sequence;
-      if (confirmed) {
-        const incomingId = sequenceIdFor(action.sequence);
-        const sameSequence = !incomingId || incomingId === sequenceIdFor(confirmed);
-        const caughtUp = incomingId && JSON.stringify(createSequenceDraftForm(action.sequence)) === JSON.stringify(createSequenceDraftForm(confirmed));
-        const version = (sequence) => Date.parse(sequence?.updated_at || sequence?.metadata?.last_edited_at || sequence?.reviewed_at || "");
-        const newer = version(action.sequence) > version(confirmed);
-        if (sameSequence && !caughtUp && !newer) return state;
-      }
-      return { ...state, form: createSequenceDraftForm(action.sequence), error: null, result: null, dirty: false };
+      if (state.result?.sequence && reconcileSequenceDraft(state.result.sequence, action.sequence) !== action.sequence) return state;
+      return { ...state, form: createSequenceDraftForm(action.sequence), sourceId: sequenceIdFor(action.sequence), error: null, result: null, dirty: false };
     }
     case "edit":
       return { ...state, mode: "edit", form: createSequenceDraftForm(action.sequence), error: null, result: null };
     case "cancel":
-      return { ...state, mode: "view", form: createSequenceDraftForm(action.sequence), error: null, dirty: false };
+      return { ...state, mode: "view", sourceId: sequenceIdFor(action.sequence), form: createSequenceDraftForm(action.sequence), error: null, result: action.sequence === state.result?.sequence ? state.result : null, dirty: false };
     case "field":
       return { ...state, dirty: true, form: { ...state.form, [action.field]: action.value } };
     case "followup": {
@@ -100,7 +102,7 @@ export function sequenceDraftReducer(state, action) {
     case "saving":
       return { ...state, mode: "saving", error: null };
     case "saved":
-      return { ...state, mode: "view", dirty: false, error: null, result: action.result, form: createSequenceDraftForm(action.result?.sequence || action.sequence) };
+      return { ...state, mode: "view", sourceId: sequenceIdFor(action.result?.sequence || action.sequence), dirty: false, error: null, result: action.result, form: createSequenceDraftForm(action.result?.sequence || action.sequence) };
     case "failed":
       return { ...state, mode: "edit", error: action.error };
     default:
