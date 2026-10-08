@@ -192,6 +192,7 @@ function toDashboardBrand(row) {
     id: row.id,
     name: row.name || row.domain || "Marca sin nombre",
     domain: row.domain || row.website_url || "—",
+    websiteUrl: row.website_url || null,
     fit: Number(row.fit_score ?? 0),
     revenue: Number(row.monthly_revenue_usd ?? 0),
     runs: {},
@@ -377,6 +378,20 @@ async function loadOutreachForBrands(brands) {
   const toolAssignmentByLead = new Map((toolAssignments || []).filter((row) => row?.lead_id).map((row) => [row.lead_id, row]));
   const suppressionsByEmail = groupBy(suppressions.map((row) => ({ ...row, email: String(row.email_address || row.recipient_email || "").toLowerCase() })), "email");
 
+  let contacts = [];
+  try {
+    const contactParams = new URLSearchParams({
+      select: "brand_id,source_lead_id,kind,value,person_name,label",
+      brand_id: `in.(${brandIds})`,
+      limit: OUTREACH_LIMIT,
+    });
+    contacts = await supabaseRest("brand_contacts", contactParams);
+  } catch (error) {
+    console.warn("No se pudo leer brand_contacts para mostrar contacto de lead", error);
+  }
+  const contactsByLead = groupBy(contacts.filter((contact) => contact.source_lead_id), "source_lead_id");
+  const contactsByBrand = groupBy(contacts, "brand_id");
+
   return new Map(brands.map((brand) => {
     const brandLeads = leadsByBrand.get(brand.id) || [];
     const lead = brandLeads.find((item) => item.lead_id === QA_LEAD_ID) || brandLeads[0] || null;
@@ -386,10 +401,18 @@ async function loadOutreachForBrands(brands) {
     const send = latestOutreachRow(sequence?.id ? sendRows.filter((row) => row.email_sequence_id === sequence.id) : sendRows);
     const email = lead.primary_email || lead.email;
     const toolAssignment = toolAssignmentByLead.get(lead.lead_id) || null;
+    const leadContacts = contactsByLead.get(lead.lead_id) || contactsByBrand.get(brand.id) || [];
+    const namedContact = leadContacts.find((contact) => contact.person_name) || null;
+    const emailContact = leadContacts.find((contact) => contact.kind === "email" && (contact.value === email || contact.label === "primary_email"))
+      || leadContacts.find((contact) => contact.kind === "email")
+      || null;
     return [brand.id, deriveOutreachStatus({
       leadId: lead.lead_id,
       lead: {
         ...lead,
+        contactName: namedContact?.person_name || null,
+        accountEmail: emailContact?.value || email || null,
+        contacts: leadContacts,
         toolAssignment,
         tool_key: toolAssignment?.assigned_tool_key ?? lead.tool_key,
       },
