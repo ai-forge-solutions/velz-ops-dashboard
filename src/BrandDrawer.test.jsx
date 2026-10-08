@@ -36,7 +36,7 @@ vi.mock("./conductorApi", () => ({
 
 const baseOutreach = {
   leadId: "lead-1",
-  lead: { ready_to_generate: true },
+  lead: { ready_to_generate: true, contactName: "Ada Lead", accountEmail: "buyer@example.com" },
   sequence: null,
   send: null,
   events: { counts: {}, latestEvent: null },
@@ -66,7 +66,7 @@ const baseOutreach = {
 };
 
 const brands = [
-  { id: "brand-1", name: "Alpha", domain: "alpha.example", runs: {}, outreach: baseOutreach },
+  { id: "brand-1", name: "Alpha", domain: "alpha.example", websiteUrl: "alpha.example", runs: {}, outreach: baseOutreach },
   { id: "brand-2", name: "Beta", domain: "beta.example", runs: {}, outreach: null },
   { id: "brand-3", name: "Gamma", domain: "gamma.example", runs: {}, outreach: null },
 ];
@@ -200,6 +200,39 @@ describe("BrandDrawer dashboard optimizations", () => {
 
     expect(mockGenerateOutreachSequence).toHaveBeenCalledWith("lead-1");
     expect(onRefresh).toHaveBeenCalled();
+  });
+
+  it("shows lead name/email and a clickable/copyable homepage in the drawer header", async () => {
+    await renderDrawer();
+
+    expect(screen.getByText("Lead contact")).toBeTruthy();
+    expect(screen.getByText("Ada Lead")).toBeTruthy();
+    expect(screen.getAllByText("buyer@example.com").length).toBeGreaterThan(0);
+
+    const homepage = screen.getByRole("link", { name: /https:\/\/alpha\.example/i });
+    expect(homepage.getAttribute("href")).toBe("https://alpha.example");
+    expect(screen.getByRole("button", { name: /Copiar/i })).toBeTruthy();
+  });
+
+  it("does not render the Outreach config diagnostics block in the sequence review area", async () => {
+    await renderDrawer({
+      brand: {
+        ...brands[0],
+        outreach: {
+          ...baseOutreach,
+          sequence: {
+            id: "seq-1",
+            lead_id: "lead-1",
+            subject: "Demo subject",
+            initial_email: "Demo body",
+            followups: [],
+          },
+        },
+      },
+    });
+
+    expect(screen.queryByText(/Outreach config diagnostics/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Test Outreach API/i })).toBeNull();
   });
 
   it("can seed a manual editable sequence draft when no generated sequence exists", async () => {

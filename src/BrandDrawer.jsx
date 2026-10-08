@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  Copy,
   ExternalLink,
   Loader2,
   Maximize2,
@@ -119,6 +120,57 @@ function KeyValue({ label, value, href }) {
         {href && value ? <a href={href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">{value}<ExternalLink size={10} /></a> : value || "—"}
       </dd>
     </div>
+  );
+}
+
+function homepageHref(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "—") return null;
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw.replace(/^\/+/, "")}`;
+}
+
+function CopyButton({ value, label = "Copiar" }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) return null;
+  async function copyValue() {
+    try {
+      await navigator.clipboard?.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={copyValue}
+      className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium"
+      style={{ border: `1px solid ${COLORS.line}`, color: copied ? COLORS.green : COLORS.ink }}
+      title={label}
+    >
+      <Copy size={11} /> {copied ? "Copiado" : "Copiar"}
+    </button>
+  );
+}
+
+function leadContactName(outreach) {
+  const lead = outreach?.lead || {};
+  return lead.contactName || lead.person_name || lead.recipient_name || outreach?.sequence?.metadata?.outreach_name_cta_edit_2026_08_10?.recipient_name || null;
+}
+
+function LeadContactSummary({ outreach }) {
+  if (!outreach) return null;
+  const name = leadContactName(outreach);
+  const email = outreach.lead?.accountEmail || outreach.email || outreach.lead?.primary_email || outreach.lead?.email || null;
+  return (
+    <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}`, background: COLORS.wash }}>
+      <h4 className="mb-2 font-medium">Lead contact</h4>
+      <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <KeyValue label="Nombre" value={name || "—"} />
+        <KeyValue label="Email account" value={email || "—"} />
+      </dl>
+    </section>
   );
 }
 
@@ -517,6 +569,7 @@ function OutreachSection({ brand, onRefresh }) {
           {outreach.suppression && <EmptyState tone={COLORS.red}>Suppression activa: {outreach.suppression.reason || outreach.suppression.type || "sin motivo"}. No enviar.</EmptyState>}
           {leadArchived && <EmptyState tone={COLORS.red}>Lead archived: oculto por defecto en el dashboard y con CTAs de Outreach desactivadas hasta reactivarlo.</EmptyState>}
           {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
+          <LeadContactSummary outreach={outreach} />
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -555,7 +608,6 @@ function OutreachSection({ brand, onRefresh }) {
               noEnviable={noEnviable}
               noEnviableReasons={outreach.noEnviableReasons || []}
             />
-            {!sequenceEditable.editable && <div className="mt-3"><OutreachDiagnostics diagnostics={diagnostics} probe={probeResult} busy={probeBusy} onProbe={runOutreachProbe} /></div>}
             <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
               <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
               <button onClick={() => runAction("reject", () => rejectOutreachSequence(sequenceId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
@@ -1174,6 +1226,7 @@ export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand
   const canNavigateBrands = Boolean(onNavigateBrand && navigationIndex >= 0 && brandUniverse.length > 1);
   const previousBrand = canNavigateBrands ? brandUniverse[(navigationIndex - 1 + brandUniverse.length) % brandUniverse.length] : null;
   const nextBrand = canNavigateBrands ? brandUniverse[(navigationIndex + 1) % brandUniverse.length] : null;
+  const homepage = homepageHref(brand.websiteUrl || brand.domain);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" aria-modal="true" role="dialog">
@@ -1186,7 +1239,23 @@ export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand
               <OutreachPill tone={headerTone}>{brand.outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "Not ready")}</OutreachPill>
               <OutreachPill tone={headerTone}>{brand.outreach?.lifecycle?.label || "Not launched"}</OutreachPill>
             </div>
-            <p className="mono text-[11px]" style={{ color: COLORS.muted }}>{brand.domain}</p>
+            <dl className="mt-2 space-y-1 text-[11px]">
+              <div className="flex flex-wrap items-center gap-2">
+                <dt style={{ color: COLORS.muted }}>Nombre de marca:</dt>
+                <dd className="font-medium">{brand.name}</dd>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <dt style={{ color: COLORS.muted }}>Homepage:</dt>
+                <dd className="mono break-all">
+                  {homepage ? (
+                    <a href={homepage} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">
+                      {homepage}<ExternalLink size={10} />
+                    </a>
+                  ) : "—"}
+                </dd>
+                <CopyButton value={homepage} label="Copiar homepage" />
+              </div>
+            </dl>
             {canNavigateBrands && (
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                 <button type="button" onClick={() => onNavigateBrand(previousBrand)} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}>
