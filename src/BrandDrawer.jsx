@@ -553,10 +553,11 @@ function OutreachSection({ brand, onRefresh }) {
         form: sequenceEditor.form,
         save: editOutreachSequenceDraft,
       });
-      if (!mounted.current) return;
-      dispatchSequenceEditor({ type: "saved", result, sequence });
-      setActionResult(result || { ok: true });
-      setActionError(null);
+      if (mounted.current) {
+        dispatchSequenceEditor({ type: "saved", result, sequence });
+        setActionResult(result || { ok: true });
+        setActionError(null);
+      }
     } catch (error) {
       if (!mounted.current) return;
       dispatchSequenceEditor({ type: "failed", error });
@@ -566,7 +567,7 @@ function OutreachSection({ brand, onRefresh }) {
     try {
       await onRefresh?.();
     } catch (error) {
-      setRefreshError(error);
+      if (mounted.current) setRefreshError(error);
     }
   }
 

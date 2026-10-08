@@ -122,7 +122,7 @@ describe("BrandDrawer sequence isolation", () => {
     await act(async () => resolveSave({ sequence: { id: "seq-A", subject: "Late A", initial_email: "Late body" } }));
     expect(screen.getByLabelText("Subject").value).toBe("Original B");
     expect(screen.getByLabelText("Subject").disabled).toBe(false);
-    expect(onRefresh).not.toHaveBeenCalled();
+    expect(onRefresh).toHaveBeenCalledTimes(1);
   });
   it("discards unsaved A text when navigating to B", async () => {
     const user = userEvent.setup();
