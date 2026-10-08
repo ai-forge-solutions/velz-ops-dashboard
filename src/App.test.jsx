@@ -5,16 +5,23 @@ import userEvent from "@testing-library/user-event";
 
 const mockLoadDashboardBrands = vi.fn();
 const mockLoadBrandGroups = vi.fn();
+const mockLoadRecentProcessRuns = vi.fn();
 const mockSaveBrandGroup = vi.fn();
 const mockDeleteBrandGroup = vi.fn();
 const mockRunConductorService = vi.fn();
 const mockGetMetaAdLibraryRun = vi.fn();
 const mockGenerateOutreachSequence = vi.fn();
 const mockPreviewProcess = vi.fn();
+const mockRunProcess = vi.fn();
+const mockExecuteProcess = vi.fn();
+const mockGetProcessRun = vi.fn();
+const mockSetBrandGroupArchived = vi.fn();
+const mockSetLeadArchived = vi.fn();
 
 vi.mock("./supabaseData", () => ({
   loadDashboardBrands: mockLoadDashboardBrands,
   loadBrandGroups: mockLoadBrandGroups,
+  loadRecentProcessRuns: mockLoadRecentProcessRuns,
   saveBrandGroup: mockSaveBrandGroup,
   deleteBrandGroup: mockDeleteBrandGroup,
 }));
@@ -27,10 +34,12 @@ vi.mock("./conductorApi", async () => {
     generateOutreachSequence: mockGenerateOutreachSequence,
     runConductorPipeline: vi.fn(),
     getMetaAdLibraryRun: mockGetMetaAdLibraryRun,
-    getProcessRun: vi.fn(),
+    getProcessRun: mockGetProcessRun,
     previewProcess: mockPreviewProcess,
-    runProcess: vi.fn(),
-    executeProcess: vi.fn(),
+    setBrandGroupArchived: mockSetBrandGroupArchived,
+    setLeadArchived: mockSetLeadArchived,
+    runProcess: mockRunProcess,
+    executeProcess: mockExecuteProcess,
   };
 });
 
@@ -122,15 +131,20 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   delete globalThis.__VELZ_RUNTIME_CONFIG__;
+  window.localStorage.clear();
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {} }]);
   mockLoadBrandGroups.mockResolvedValue([]);
+  mockLoadRecentProcessRuns.mockResolvedValue([]);
   mockSaveBrandGroup.mockResolvedValue({ id: "group-1", name: "Grupo QA", description: "", brandCount: 1, brandIds: [brand.id] });
   mockDeleteBrandGroup.mockResolvedValue(undefined);
   mockPreviewProcess.mockResolvedValue({ brand_count: 1, total_items_estimated: 5 });
+  mockRunProcess.mockResolvedValue({ process_run_id: "run-new-123", status: "queued", created_at: "2026-10-07T10:15:00Z" });
+  mockExecuteProcess.mockResolvedValue({ status: "success", message: "ok" });
+  mockGetProcessRun.mockResolvedValue({ id: "run-new-123", status: "queued", brand_count: 1, item_count: 5, steps: ["brand_context"], items: [] });
   mockRunConductorService.mockResolvedValue({
     success: true,
     status: "success",
@@ -139,6 +153,8 @@ beforeEach(() => {
   });
   mockGetMetaAdLibraryRun.mockResolvedValue({});
   mockGenerateOutreachSequence.mockResolvedValue({ message: "Drafting completado.", sequence: generatedSequence });
+  mockSetBrandGroupArchived.mockResolvedValue({ affected_lead_count: 2 });
+  mockSetLeadArchived.mockResolvedValue({ ok: true });
 });
 
 describe("Brand group MVP", () => {
@@ -244,6 +260,88 @@ describe("Brand group MVP", () => {
     await waitFor(() => expect(mockPreviewProcess).toHaveBeenCalled());
     expect(mockPreviewProcess.mock.calls[0][0].brand_ids).toEqual([brand.id]);
     expect(screen.getByText("Preview real generado por el backend de procesos.")).toBeTruthy();
+  });
+
+  it("loads recent process runs from Supabase into a simple dropdown and loads one without retyping the ID", async () => {
+    const user = userEvent.setup();
+    mockLoadRecentProcessRuns.mockResolvedValue([
+      {
+        id: "run-old-456",
+        created_at: "2026-10-07T09:30:00Z",
+        status: "success",
+        brand_count: 2,
+        item_count: 4,
+        request_payload: { steps: [{ id: "brand_context" }, { id: "email_generation" }] },
+      },
+    ]);
+    mockGetProcessRun.mockResolvedValue({
+      id: "run-old-456",
+      status: "success",
+      brand_count: 2,
+      item_count: 4,
+      steps: ["brand_context", "email_generation"],
+      items: [],
+    });
+
+    await renderLoadedApp();
+    await user.click(screen.getByRole("button", { name: "Procesos" }));
+
+    await waitFor(() => expect(mockLoadRecentProcessRuns).toHaveBeenCalledWith({ limit: 20 }));
+    const recentSelect = screen.getByRole("combobox", { name: /Procesos recientes/i });
+    expect(within(recentSelect).getByRole("option", { name: /7\/10.*2 marcas.*Contexto de marca \+ Drafting.*success.*#old-456/i })).toBeTruthy();
+
+    await user.selectOptions(recentSelect, "run-old-456");
+
+    await waitFor(() => expect(mockGetProcessRun).toHaveBeenCalledWith("run-old-456"));
+    expect(screen.getByText(/proceso:/i).textContent).toMatch(/2 marcas/);
+    expect(screen.getByText(/proceso:/i).textContent).not.toMatch(/process_run_id:/i);
+  });
+
+  it("hides archived leads by default and reveals them with the archived toggle", async () => {
+    const user = userEvent.setup();
+    mockLoadDashboardBrands.mockResolvedValue([
+      { ...brand, runs: {}, outreach: { ...readyToGenerateOutreach, archived: true, archive: { archivedAt: "2026-09-23T12:00:00Z" } } },
+      { ...secondBrand, runs: {}, outreach: null },
+    ]);
+
+    const App = (await import("./App.jsx")).default;
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("Velz Test Store").length).toBeGreaterThan(0));
+    expect(screen.queryByText("OcCre")).toBeNull();
+
+    await user.click(screen.getByRole("checkbox", { name: /Mostrar archivados/i }));
+    expect(screen.getAllByText("OcCre").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Archived/i).length).toBeGreaterThan(0);
+  });
+
+  it("archives an active group through Outreach API copy with cascade semantics", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {} }]);
+    mockLoadBrandGroups.mockResolvedValue([qaGroup]);
+
+    await renderLoadedApp();
+    await user.selectOptions(screen.getByRole("combobox", { name: /Grupo:/i }), "group-qa");
+    await user.click(screen.getByRole("button", { name: /Archivar grupo/i }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("archivará sus leads miembro individualmente"));
+    expect(mockSetBrandGroupArchived).toHaveBeenCalledWith("group-qa", true, "Archived group from Velz Ops Dashboard.");
+    await waitFor(() => expect(screen.getByText(/2 leads afectados/i)).toBeTruthy());
+  });
+
+  it("archives selected brands individually through Outreach API", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {}, outreach: readyToGenerateOutreach }]);
+
+    await renderLoadedApp();
+    const table = screen.getByRole("table");
+    await user.click(within(table).getAllByRole("checkbox")[0]);
+    await user.click(screen.getByRole("button", { name: /Archivar selección/i }));
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Archivar 1 lead seleccionado"));
+    expect(mockSetLeadArchived).toHaveBeenCalledWith("lead-1", true, "Archived selected lead from Velz Ops Dashboard.");
+    await waitFor(() => expect(screen.getByText(/1 lead archivado/i)).toBeTruthy());
   });
 });
 

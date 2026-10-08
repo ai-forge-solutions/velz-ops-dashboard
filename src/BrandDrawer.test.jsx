@@ -6,6 +6,9 @@ import userEvent from "@testing-library/user-event";
 const mockLoadBrandSource = vi.fn();
 const mockSetLeadMagnetToolKey = vi.fn();
 const mockGenerateOutreachSequence = vi.fn();
+const mockCreateManualOutreachSequenceDraft = vi.fn();
+const mockSetLeadArchived = vi.fn();
+const mockSetOutreachSequenceStatus = vi.fn();
 
 vi.mock("./supabaseData", () => ({
   loadBrandSource: mockLoadBrandSource,
@@ -15,6 +18,7 @@ vi.mock("./supabaseData", () => ({
 
 vi.mock("./conductorApi", () => ({
   approveOutreachSequence: vi.fn(),
+  createManualOutreachSequenceDraft: mockCreateManualOutreachSequenceDraft,
   editOutreachSequenceDraft: vi.fn(),
   generateOutreachSequence: mockGenerateOutreachSequence,
   launchSaleshandyQaBulk: vi.fn(),
@@ -26,6 +30,8 @@ vi.mock("./conductorApi", () => ({
   probeOutreachRuntime: vi.fn().mockResolvedValue({ diagnostics: { configured: true, editDraftConfigured: true } }),
   rejectOutreachSequence: vi.fn(),
   saleshandyQaLaunchConfigured: vi.fn(() => true),
+  setLeadArchived: mockSetLeadArchived,
+  setOutreachSequenceStatus: mockSetOutreachSequenceStatus,
 }));
 
 const baseOutreach = {
@@ -48,7 +54,7 @@ const baseOutreach = {
   canApprove: false,
   canReject: false,
   launchEligible: false,
-  actionConfigured: { generate: true, approve: true, reject: true, launch: true },
+  actionConfigured: { generate: true, approve: true, reject: true, archiveLead: true, setSequenceStatus: true, launch: true },
   journey: [
     { key: "readiness", label: "Readiness", status: "done" },
     { key: "sequence", label: "Sequence", status: "current" },
@@ -88,7 +94,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockLoadBrandSource.mockResolvedValue([]);
   mockSetLeadMagnetToolKey.mockResolvedValue({});
+  mockCreateManualOutreachSequenceDraft.mockResolvedValue({ message: "manual draft", sequence: { id: "seq-manual-1", lead_id: "lead-1", send_status: "not_scheduled" } });
   mockGenerateOutreachSequence.mockResolvedValue({ message: "generated", sequence: { id: "seq-1", lead_id: "lead-1" } });
+  mockSetLeadArchived.mockResolvedValue({ ok: true });
+  mockSetOutreachSequenceStatus.mockResolvedValue({ ok: true });
 });
 
 describe("BrandDrawer dashboard optimizations", () => {
@@ -224,5 +233,59 @@ describe("BrandDrawer dashboard optimizations", () => {
 
     expect(screen.queryByText(/Outreach config diagnostics/i)).toBeNull();
     expect(screen.queryByRole("button", { name: /Test Outreach API/i })).toBeNull();
+  });
+
+  it("can seed a manual editable sequence draft when no generated sequence exists", async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn();
+
+    await renderDrawer({ onRefresh });
+
+    const reviewSection = screen.getByText("Sequence draft / review").closest("section");
+    await user.click(within(reviewSection).getByRole("button", { name: /Crear draft manual/i }));
+
+    expect(mockCreateManualOutreachSequenceDraft).toHaveBeenCalledWith("lead-1");
+    expect(onRefresh).toHaveBeenCalled();
+  });
+
+  it("renders no_enviable as metadata instead of sendable copy and disables approve/export", async () => {
+    await renderDrawer({
+      brand: {
+        ...brands[0],
+        outreach: {
+          ...baseOutreach,
+          sequence: {
+            id: "seq-no",
+            lead_id: "lead-1",
+            status: "no_enviable",
+            review_status: "not_ready",
+            subject: "NO_ENVIABLE",
+            initial_email: "NO_ENVIABLE: faltan fuentes",
+          },
+          readiness: { key: "no_enviable", label: "No enviable" },
+          noEnviable: true,
+          noEnviableReasons: ["faltan fuentes"],
+          canApprove: false,
+          launchEligible: false,
+        },
+      },
+    });
+
+    expect(screen.getAllByText(/No enviable/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/faltan fuentes/i)).toBeTruthy();
+    expect(screen.queryByText("NO_ENVIABLE: faltan fuentes")).toBeNull();
+    expect(screen.getByRole("button", { name: /Approve sequence/i }).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: /Export to Instantly/i }).disabled).toBe(true);
+  });
+
+  it("archives an active lead through the Outreach API", async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn();
+
+    await renderDrawer({ onRefresh });
+    await user.click(screen.getByRole("button", { name: /Archive lead/i }));
+
+    expect(mockSetLeadArchived).toHaveBeenCalledWith("lead-1", true, "Archived from Velz Ops Dashboard.");
+    expect(onRefresh).toHaveBeenCalled();
   });
 });
