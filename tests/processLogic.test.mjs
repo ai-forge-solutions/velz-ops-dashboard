@@ -5,6 +5,7 @@ import {
   findProcessRunItem,
   isProcessRunTerminal,
   PROCESS_STEP_OPTIONS,
+  normalizeProcessStep,
   processRunBrands,
   processRunStatusSummary,
   processRunSteps,
@@ -47,7 +48,19 @@ assert.equal(defaults.find((step) => step.id === "brand_context").mode, "preserv
 assert.equal(defaults.find((step) => step.id === "shopify_signals").enabled, true);
 assert.equal(defaults.find((step) => step.id === "shopify_signals").mode, "preserve_success");
 assert.equal(defaults.find((step) => step.id === "email_generation").mode, "overwrite");
+assert.equal(defaults.find((step) => step.id === "email_generation").generator, "skill_web");
 assert.equal(defaults.find((step) => step.id === "email_send").enabled, false);
+assert.deepEqual(normalizeProcessStep({ id: "email_generation", mode: "overwrite" }), { id: "email_generation", mode: "overwrite", generator: "current" });
+assert.deepEqual(normalizeProcessStep({ id: "email_generation", mode: "overwrite", generator: "skill_web" }), { id: "email_generation", mode: "overwrite", generator: "skill_web" });
+assert.deepEqual(normalizeProcessStep({ id: "email_generation", mode: "overwrite", generator: "unexpected" }), { id: "email_generation", mode: "overwrite", generator: "current" });
+
+assert.deepEqual(
+  buildProcessPayload({
+    brandIds: ["brand-a"],
+    steps: [{ id: "email_generation", mode: "overwrite", enabled: true, generator: "skill_web" }],
+  }).steps,
+  [{ id: "email_generation", mode: "overwrite", generator: "skill_web" }],
+);
 
 assert.deepEqual(
   buildProcessPayload({

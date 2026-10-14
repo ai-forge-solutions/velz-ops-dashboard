@@ -247,7 +247,7 @@ describe("Brand group MVP", () => {
     expect(within(table).getAllByRole("checkbox").filter((checkbox) => checkbox.checked)).toHaveLength(1);
   });
 
-  it("sends group brand_ids to the real process preview payload", async () => {
+  it("sends group brand_ids and the default Skill web generator to the real process preview payload", async () => {
     const user = userEvent.setup();
     mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {} }, { ...secondBrand, runs: {} }]);
     mockLoadBrandGroups.mockResolvedValue([qaGroup]);
@@ -255,11 +255,28 @@ describe("Brand group MVP", () => {
     await renderLoadedApp();
     await user.click(screen.getByRole("button", { name: "Procesos" }));
     await user.click(screen.getByRole("radio", { name: /Grupo/i }));
+
+    const generatorSelect = screen.getByRole("combobox", { name: /Motor de Drafting/i });
+    expect(generatorSelect.value).toBe("skill_web");
     await user.click(screen.getByRole("button", { name: /Preview real/i }));
 
     await waitFor(() => expect(mockPreviewProcess).toHaveBeenCalled());
     expect(mockPreviewProcess.mock.calls[0][0].brand_ids).toEqual([brand.id]);
+    expect(mockPreviewProcess.mock.calls[0][0].steps).toContainEqual({ id: "email_generation", mode: "overwrite", generator: "skill_web" });
     expect(screen.getByText("Preview real generado por el backend de procesos.")).toBeTruthy();
+  });
+
+  it("allows selecting the current generator and carries it through preview", async () => {
+    const user = userEvent.setup();
+    await renderLoadedApp();
+    await user.click(screen.getByRole("button", { name: "Procesos" }));
+    await user.click(screen.getByRole("radio", { name: /Todas/i }));
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /Motor de Drafting/i }), "current");
+    await user.click(screen.getByRole("button", { name: /Preview real/i }));
+
+    await waitFor(() => expect(mockPreviewProcess).toHaveBeenCalled());
+    expect(mockPreviewProcess.mock.calls[0][0].steps).toContainEqual({ id: "email_generation", mode: "overwrite", generator: "current" });
   });
 
   it("loads recent process runs from Supabase into a simple dropdown and loads one without retyping the ID", async () => {
@@ -272,6 +289,14 @@ describe("Brand group MVP", () => {
         brand_count: 2,
         item_count: 4,
         request_payload: { steps: [{ id: "brand_context" }, { id: "email_generation" }] },
+      },
+      {
+        id: "run-web-789",
+        created_at: "2026-10-07T10:30:00Z",
+        status: "success",
+        brand_count: 1,
+        item_count: 1,
+        request_payload: { steps: [{ id: "email_generation", generator: "skill_web" }] },
       },
     ]);
     mockGetProcessRun.mockResolvedValue({
@@ -288,7 +313,8 @@ describe("Brand group MVP", () => {
 
     await waitFor(() => expect(mockLoadRecentProcessRuns).toHaveBeenCalledWith({ limit: 20 }));
     const recentSelect = screen.getByRole("combobox", { name: /Procesos recientes/i });
-    expect(within(recentSelect).getByRole("option", { name: /7\/10.*2 marcas.*Contexto de marca \+ Drafting.*success.*#old-456/i })).toBeTruthy();
+    expect(within(recentSelect).getByRole("option", { name: /7\/10.*2 marcas.*Contexto de marca \+ Drafting \(Actual — datos recopilados\).*success.*#old-456/i })).toBeTruthy();
+    expect(within(recentSelect).getByRole("option", { name: /7\/10.*1 marca.*Drafting \(Skill web — investigación de la tienda\).*success.*#web-789/i })).toBeTruthy();
 
     await user.selectOptions(recentSelect, "run-old-456");
 

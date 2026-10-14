@@ -85,6 +85,29 @@ function fmtTime(iso) {
 
 const PROCESS_RUN_HISTORY_KEY = "velz.processRunHistory.v1";
 const MAX_PROCESS_RUN_HISTORY = 20;
+const EMAIL_GENERATOR_LABELS = {
+  current: "Actual — datos recopilados",
+  skill_web: "Skill web — investigación de la tienda",
+};
+
+function normalizeProcessHistoryStep(step) {
+  if (!step) return null;
+  if (typeof step === "string") return { id: step };
+  const id = step.id || step.step_id;
+  if (!id) return null;
+  return {
+    id,
+    ...(id === "email_generation" ? { generator: step.generator || "current" } : {}),
+  };
+}
+
+function processStepHistoryLabel(step) {
+  const normalized = normalizeProcessHistoryStep(step);
+  if (!normalized) return "";
+  const label = processStepLabel(normalized.id);
+  if (normalized.id !== "email_generation") return label;
+  return `${label} (${EMAIL_GENERATOR_LABELS[normalized.generator || "current"]})`;
+}
 
 function shortProcessRunId(processRunId) {
   if (!processRunId) return "—";
@@ -103,11 +126,11 @@ function normalizeProcessRunHistoryEntry(input = {}) {
     brandCount: input.brand_count ?? input.brandCount ?? input.payload?.brand_ids?.length ?? null,
     itemCount: input.item_count ?? input.itemCount ?? (Array.isArray(input.items) ? input.items.length : null),
     steps: Array.isArray(input.steps)
-      ? input.steps.map((step) => typeof step === "string" ? step : step?.id).filter(Boolean)
+      ? input.steps.map(normalizeProcessHistoryStep).filter(Boolean)
       : Array.isArray(input.payload?.steps)
-        ? input.payload.steps.map((step) => step?.id).filter(Boolean)
+        ? input.payload.steps.map(normalizeProcessHistoryStep).filter(Boolean)
         : Array.isArray(input.request_payload?.steps)
-          ? input.request_payload.steps.map((step) => step?.id).filter(Boolean)
+          ? input.request_payload.steps.map(normalizeProcessHistoryStep).filter(Boolean)
           : [],
   };
 }
@@ -124,7 +147,7 @@ function loadProcessRunHistory() {
 function processRunHistoryLabel(entry) {
   const created = fmtTime(entry.createdAt);
   const brandText = entry.brandCount != null ? `${entry.brandCount} marca${Number(entry.brandCount) === 1 ? "" : "s"}` : "proceso";
-  const stepText = entry.steps?.length ? entry.steps.map(processStepLabel).join(" + ") : `${entry.itemCount ?? "—"} items`;
+  const stepText = entry.steps?.length ? entry.steps.map(processStepHistoryLabel).filter(Boolean).join(" + ") : `${entry.itemCount ?? "—"} items`;
   const status = entry.status ? ` · ${entry.status}` : "";
   return `${created} · ${brandText} · ${stepText}${status} · #${shortProcessRunId(entry.id)}`;
 }
@@ -1466,9 +1489,9 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
         ...result,
         status: result?.status || "queued",
         brandCount: payload.brand_ids.length,
-        steps: payload.steps.map((step) => step.id),
+        steps: payload.steps,
       });
-      setActionMessage({ tone: "success", text: `Proceso creado · ${processRunHistoryLabel(normalizeProcessRunHistoryEntry({ id: processRunId, ...result, brandCount: payload.brand_ids.length, steps: payload.steps.map((step) => step.id) }))}. Lanzando ejecución backend…` });
+      setActionMessage({ tone: "success", text: `Proceso creado · ${processRunHistoryLabel(normalizeProcessRunHistoryEntry({ id: processRunId, ...result, brandCount: payload.brand_ids.length, steps: payload.steps }))}. Lanzando ejecución backend…` });
       await refreshProcessRun(processRunId, { quiet: true });
       setExecutingRunId(processRunId);
       executeProcess(processRunId, executionPayload)
@@ -1634,6 +1657,22 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
                       <option value="overwrite">overwrite</option>
                     </select>
                   </div>
+                  {option.id === "email_generation" && (
+                    <div className="mt-2 flex flex-col gap-1 text-[11px] sm:flex-row sm:items-center sm:justify-between" style={{ color: COLORS.muted }}>
+                      <span>Motor para borrador</span>
+                      <select
+                        aria-label="Motor de Drafting"
+                        disabled={!enabled}
+                        value={step?.generator || "current"}
+                        onChange={(event) => updateStep(option.id, { generator: event.target.value })}
+                        className="rounded px-2 py-1 text-xs"
+                        style={{ border: `1px solid ${COLORS.line}` }}
+                      >
+                        <option value="current">{EMAIL_GENERATOR_LABELS.current}</option>
+                        <option value="skill_web">{EMAIL_GENERATOR_LABELS.skill_web}</option>
+                      </select>
+                    </div>
+                  )}
                   {option.id === "email_send" && (
                     <p className="mt-2 text-[11px]" style={{ color: COLORS.amber }}>
                       Envío real: actívalo solo si quieres lanzar emails ahora. No se bloquea después de seleccionarlo explícitamente.
