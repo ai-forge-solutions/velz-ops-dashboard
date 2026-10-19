@@ -23,10 +23,29 @@ assert.deepEqual(
   ["brand-a", "brand-c"],
 );
 
+// A stale scope value must no longer activate score-based filtering.
 assert.deepEqual(
-  resolveProcessBrandIds({ brands, selectedIds: new Set(), scope: "fit_score", fitScoreMin: 70, limit: 1 }),
-  ["brand-a"],
+  resolveProcessBrandIds({ brands, scope: "fit_score", fitScoreMin: 100, limit: 10 }),
+  ["brand-a", "brand-b", "brand-c"],
 );
+
+for (const scope of ["selected", "group", "all"]) {
+  const scoreVariants = [
+    { id: "low", fit: 1 },
+    { id: "null", fit_score: null },
+    { id: "missing" },
+    { id: "zero", fit_score: 0 },
+    { id: "high", fit: 99 },
+  ];
+  const ids = scoreVariants.map((brand) => brand.id);
+  const brandIds = resolveProcessBrandIds({
+    brands: scoreVariants, selectedIds: new Set(ids), groupBrandIds: ids,
+    scope, limit: 4,
+  });
+  assert.deepEqual(brandIds, ids.slice(0, 4), `${scope} keeps low/null/missing/zero scores and honors limit`);
+  assert.deepEqual(buildProcessPayload({ brandIds, limit: 4 }).filters, { limit: 4 }, `${scope} never sends a fit filter`);
+  assert.deepEqual(buildProcessPayload({ brandIds }).brand_ids, ids.slice(0, 4));
+}
 
 assert.deepEqual(
   resolveProcessBrandIds({ brands, scope: "group", groupBrandIds: ["brand-c", "brand-a"], limit: 10 }),
@@ -79,7 +98,7 @@ assert.deepEqual(
   }),
   {
     brand_ids: ["brand-a", "brand-b"],
-    filters: { fit_score_min: 70, limit: 500 },
+    filters: { limit: 500 },
     steps: [
       { id: "brand_context", mode: "preserve_success" },
       { id: "shopify_signals", mode: "overwrite" },

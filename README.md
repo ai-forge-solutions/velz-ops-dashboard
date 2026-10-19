@@ -70,6 +70,12 @@ VITE_CONDUCTOR_BASE_URL=https://velz-signals-conductor-stg.blackocean-de4b65c4.w
 
 Los servicios desplegados (`meta_ad_library_scraper`, `brand_reviews`, `web_stack_wappalyzer`, `shopify_signals`, `brand_context`) envían `{ "supabase_id": "<brands.id>" }` a sus endpoints del conductor. `shopify_signals` dispara `POST /microservices/shopify-signals`, que a su vez llama al microservicio Shopify ya integrado por el conductor. Los servicios sin endpoint (`similarweb`, `drafting`, `export`) se muestran como no desplegados y no disparan llamadas. El botón Pipeline usa `POST /microservices/run-all`; las ejecuciones individuales usan el endpoint de cada servicio. La pestaña Procesos prepara `{ brand_ids, filters, steps, execution }`, llama `POST /processes/preview`, crea el run con `POST /processes/runs`, lanza el executor con `POST /processes/runs/{id}/execute` y hace polling de `GET /processes/runs/{id}` para pintar la tabla real `brand × step`, modos, `service_run_id` y errores.
 
+### Selección de marcas en Procesos
+
+Los únicos scopes son **Seleccionadas**, **Grupo** y **Todas** (marcas cargadas en el dashboard). Todos conservan el límite configurado y admiten marcas con fit bajo, cero, nulo o sin score. El fit sigue siendo informativo en otras pantallas, pero no es un criterio de selección ni un filtro de procesos.
+
+El payload común de preview y creación envía `filters: { limit }`: nunca incluye `fit_score_min`. Selección manual, grupos, steps, motor de Drafting y opciones de ejecución mantienen su comportamiento.
+
 ## Estructura
 
 ```

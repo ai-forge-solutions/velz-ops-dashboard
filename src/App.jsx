@@ -1346,7 +1346,6 @@ function OutreachView({ brands, loading, error, openBrandDrawer, showArchived, s
 function ProcessesView({ brands, selected, brandGroups, actionMessage, setActionMessage, clearActionMessage }) {
   const [scope, setScope] = useState("selected");
   const [processGroupId, setProcessGroupId] = useState("");
-  const [fitScoreMin, setFitScoreMin] = useState(70);
   const [limit, setLimit] = useState(500);
   const [steps, setSteps] = useState(defaultProcessSteps);
   const [strategy, setStrategy] = useState("serial");
@@ -1368,8 +1367,8 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
 
   const selectedProcessGroup = brandGroups.find((group) => group.id === processGroupId) || brandGroups[0] || null;
   const groupBrandIds = selectedProcessGroup?.brandIds || [];
-  const brandIds = resolveProcessBrandIds({ brands, selectedIds: selected, scope, fitScoreMin, limit, groupBrandIds });
-  const payload = buildProcessPayload({ brandIds, fitScoreMin, limit, steps, strategy, maxConcurrency, continueOnError });
+  const brandIds = resolveProcessBrandIds({ brands, selectedIds: selected, scope, limit, groupBrandIds });
+  const payload = buildProcessPayload({ brandIds, limit, steps, strategy, maxConcurrency, continueOnError });
   const currentSignature = payloadSignature(payload);
   const previewIsCurrent = validatedSignature === currentSignature;
   const selectedSteps = payload.steps;
@@ -1603,7 +1602,7 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
 
         <section className="mb-5">
           <label className="mb-2 block text-[11px]" style={{ color: COLORS.muted }}>Marcas</label>
-          <div className="grid gap-2 text-xs sm:grid-cols-4">
+          <div className="grid gap-2 text-xs sm:grid-cols-3">
             <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "selected" ? COLORS.ink : COLORS.line}` }}>
               <input type="radio" checked={scope === "selected"} onChange={() => { setScope("selected"); resetPreviewState(); }} className="mr-2" />
               Seleccionadas ({selected.size})
@@ -1620,11 +1619,6 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
               >
                 {brandGroups.length === 0 ? <option value="">Sin grupos</option> : brandGroups.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.brandCount})</option>)}
               </select>
-            </label>
-            <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "fit_score" ? COLORS.ink : COLORS.line}` }}>
-              <input type="radio" checked={scope === "fit_score"} onChange={() => { setScope("fit_score"); resetPreviewState(); }} className="mr-2" />
-              Fit score ≥
-              <input type="number" value={fitScoreMin} onChange={e => { setFitScoreMin(Number(e.target.value)); resetPreviewState(); }} className="ml-2 w-14 mono rounded px-1 py-0.5" style={{ border: `1px solid ${COLORS.line}` }} />
             </label>
             <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "all" ? COLORS.ink : COLORS.line}` }}>
               <input type="radio" checked={scope === "all"} onChange={() => { setScope("all"); resetPreviewState(); }} className="mr-2" />
