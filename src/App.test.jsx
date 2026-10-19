@@ -157,6 +157,33 @@ beforeEach(() => {
   mockSetLeadArchived.mockResolvedValue({ ok: true });
 });
 
+describe("Processes without fit filtering", () => {
+  it.each(["selected", "group", "all"])("previews %s low/null-score brands with no fit control or filter", async (scope) => {
+    const user = userEvent.setup();
+    mockLoadDashboardBrands.mockResolvedValue([
+      { ...brand, fit: 1 }, { ...secondBrand, fit: null },
+    ]);
+    mockLoadBrandGroups.mockResolvedValue([
+      { ...qaGroup, brandCount: 2, brandIds: [brand.id, secondBrand.id] },
+    ]);
+    await renderLoadedApp();
+    await user.click(screen.getByRole("button", { name: /Seleccionar visibles/i }));
+    await user.click(screen.getByRole("button", { name: "Procesos" }));
+    expect(screen.queryByText(/Fit score/i)).toBeNull();
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    const scopeName = { selected: /Seleccionadas/i, group: /Grupo/i, all: /Todas/i }[scope];
+    await user.click(screen.getByRole("radio", { name: scopeName }));
+    await user.click(screen.getByRole("button", { name: /Preview real/i }));
+    await waitFor(() => expect(mockPreviewProcess).toHaveBeenCalledTimes(1));
+    const payload = mockPreviewProcess.mock.calls[0][0];
+    expect(payload.brand_ids).toEqual([brand.id, secondBrand.id]);
+    expect(payload.filters).toEqual({ limit: 500 });
+    expect(payload.steps.find((step) => step.id === "email_generation").generator).toBe("skill_web");
+    expect(mockRunProcess).not.toHaveBeenCalled();
+    expect(mockExecuteProcess).not.toHaveBeenCalled();
+  });
+});
+
 describe("Brand group MVP", () => {
   it("opens the details panel from non-ETL row clicks but not ETL controls", async () => {
     const user = userEvent.setup();
