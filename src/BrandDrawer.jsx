@@ -44,6 +44,7 @@ import {
 import {
   createSequenceDraftForm,
   isSequenceDraftEditable,
+  reconcileSequenceDraft,
   runSequenceDraftSave,
   sequenceDraftReducer,
   sequenceIdFor,
@@ -478,6 +479,7 @@ function OutreachSection({ brand, onRefresh }) {
   const actionConfigured = outreach?.actionConfigured || {};
   const sequenceId = sequenceIdFor(sequence);
   const createdSequenceId = useRef("");
+  const saveOperation = useRef(0);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -487,6 +489,7 @@ function OutreachSection({ brand, onRefresh }) {
   const [sequenceEditor, dispatchSequenceEditor] = useReducer(sequenceDraftReducer, {
     mode: "view",
     form: createSequenceDraftForm(sequence),
+    sourceId: sequenceId,
     error: null,
     result: null,
   });
@@ -499,9 +502,9 @@ function OutreachSection({ brand, onRefresh }) {
   const canApprove = Boolean(outreach?.canApprove && actionConfigured.approve && sequenceId && !outreach?.blockers?.length);
   const canReject = Boolean(outreach?.canReject && actionConfigured.reject && sequenceId);
   const canLaunch = Boolean(outreach?.launchEligible && configured && sequenceId && !outreach?.blockers?.length && !outreach?.launchBlockers?.length);
-  const displayedSequence = sequenceEditor.result?.sequence || sequence;
-  const displayedReviewStatus = outreach?.noEnviable ? "No enviable" : displayedSequence?.review_status || outreach?.readiness?.label;
-  const noEnviable = Boolean(outreach?.noEnviable);
+  const displayedSequence = reconcileSequenceDraft(sequenceEditor.result?.sequence, sequence);
+  const noEnviable = Boolean(outreach?.noEnviable || sequence?.status === "no_enviable" || displayedSequence?.status === "no_enviable");
+  const displayedReviewStatus = noEnviable ? "No enviable" : displayedSequence?.review_status || outreach?.readiness?.label;
   const leadArchived = Boolean(outreach?.archived);
   // Do not use outreach.actionConfigured.editDraft here: it is captured when
   // Supabase rows load and can be stale if runtime-config arrives afterwards.
@@ -509,10 +512,11 @@ function OutreachSection({ brand, onRefresh }) {
   // edit gating must read the live runtime config directly on each render.
   const liveDiagnostics = outreachRuntimeDiagnostics();
   const editConfigured = Boolean(liveDiagnostics.editDraftConfigured);
+  const incomingEditable = sequence && isSequenceDraftEditable({ sequence, configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
   const sequenceEditable = leadArchived
     ? { editable: false, reason: "Lead archived: reactiva el lead antes de editar." }
+    : incomingEditable && !incomingEditable.editable ? incomingEditable
     : isSequenceDraftEditable({ sequence: displayedSequence || (outreach?.leadId && actionConfigured.generate ? { id: "unsaved" } : null), configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
-  const sequenceIsEditing = sequenceEditor.mode === "edit" || sequenceEditor.mode === "saving";
 
   useEffect(() => {
     dispatchSequenceEditor({ type: "sync", sequence });
@@ -535,6 +539,10 @@ function OutreachSection({ brand, onRefresh }) {
 
   async function saveSequenceDraft() {
     if (sequenceEditor.mode === "saving" || busyAction || !sequenceEditable.editable || noEnviable) return;
+    if (sequenceEditor.sourceId && sequenceId && sequenceEditor.sourceId !== sequenceId) {
+      dispatchSequenceEditor({ type: "failed", error: new Error("La secuencia cambió mientras editabas. Descarta los cambios para cargar la versión actual antes de guardar.") });
+      return;
+    }
     if (!sequenceEditor.form.subject.trim() || !sequenceEditor.form.initial_email.trim()) {
       dispatchSequenceEditor({ type: "failed", error: new Error("Completa el asunto y el cuerpo antes de guardar.") });
       return;
@@ -543,6 +551,7 @@ function OutreachSection({ brand, onRefresh }) {
       dispatchSequenceEditor({ type: "failed", error: new Error("Completa el cuerpo de cada followup o elimínalo antes de guardar.") });
       return;
     }
+    const operation = ++saveOperation.current;
     setRefreshError(null);
     dispatchSequenceEditor({ type: "saving" });
     try {
@@ -567,7 +576,7 @@ function OutreachSection({ brand, onRefresh }) {
     try {
       await onRefresh?.();
     } catch (error) {
-      if (mounted.current) setRefreshError(error);
+      if (mounted.current && operation === saveOperation.current) setRefreshError(error);
     }
   }
 

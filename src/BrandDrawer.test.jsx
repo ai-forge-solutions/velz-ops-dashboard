@@ -144,6 +144,57 @@ describe("BrandDrawer sequence isolation", () => {
 });
 
 describe("BrandDrawer inline sequence", () => {
+  it("ignores refresh failure from an older save after a newer save succeeds", async () => {
+    const user = userEvent.setup();
+    let rejectOldRefresh;
+    const onRefresh = vi.fn().mockImplementationOnce(() => new Promise((resolve, reject) => { rejectOldRefresh = reject; })).mockResolvedValue(undefined);
+    mockEditOutreachSequenceDraft.mockImplementation(async (id, payload) => ({ sequence: { id, ...payload, send_status: "not_scheduled" } }));
+    await renderDrawer({ brand: sequenceBrand("A", "Original A"), onRefresh });
+    await user.click(screen.getByRole("button", { name: /^Guardar$/ }));
+    await user.type(screen.getByLabelText("Subject"), " newer");
+    await user.click(screen.getByRole("button", { name: /^Guardar$/ }));
+    await act(async () => rejectOldRefresh(new Error("obsolete refresh error")));
+    expect(screen.queryByText(/obsolete refresh error/)).toBeNull();
+    expect(screen.getByLabelText("Subject").value).toBe("Original A newer");
+  });
+  it("uses incoming launched state even with saved override and dirty copy", async () => {
+    const user = userEvent.setup();
+    mockEditOutreachSequenceDraft.mockImplementation(async (id, payload) => ({ sequence: { id, ...payload, send_status: "not_scheduled" } }));
+    const { rerender } = await renderDrawer({ brand: sequenceBrand("A", "Original A") });
+    await user.click(screen.getByRole("button", { name: /^Guardar$/ }));
+    await user.type(screen.getByLabelText("Subject"), " unsaved");
+    const incoming = sequenceBrand("A", "Original A");
+    incoming.outreach.sequence.send_status = "sent";
+    await switchBrand(rerender, incoming);
+    expect(screen.queryByRole("button", { name: /^Guardar$/ })).toBeNull();
+  });
+  it("does not save dirty copy against a changed sequence identity until discard", async () => {
+    const user = userEvent.setup();
+    mockEditOutreachSequenceDraft.mockImplementation(async (id, payload) => ({ sequence: { id, ...payload, send_status: "not_scheduled" } }));
+    const { rerender } = await renderDrawer({ brand: sequenceBrand("A", "Original A") });
+    await user.click(screen.getByRole("button", { name: /^Guardar$/ }));
+    await user.type(screen.getByLabelText("Subject"), " unsaved");
+    const incoming = sequenceBrand("A", "Replacement A");
+    incoming.outreach.sequence.id = "seq-replacement";
+    await switchBrand(rerender, incoming);
+    await user.click(screen.getByRole("button", { name: /^Guardar$/ }));
+    expect(mockEditOutreachSequenceDraft).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("Subject").value).toBe("Original A unsaved");
+    await user.click(screen.getByRole("button", { name: /Descartar cambios/ }));
+    expect(screen.getByLabelText("Subject").value).toBe("Replacement A");
+  });
+  it("discards to a newer server version received after a save", async () => {
+    const user = userEvent.setup();
+    mockEditOutreachSequenceDraft.mockImplementation(async (id, payload) => ({ sequence: { id, ...payload, send_status: "not_scheduled", updated_at: "2026-10-08T07:00:00Z" } }));
+    const { rerender } = await renderDrawer({ brand: sequenceBrand("A", "Original A") });
+    await user.click(screen.getByRole("button", { name: /^Guardar$/ }));
+    await user.type(screen.getByLabelText("Subject"), " unsaved");
+    const incoming = sequenceBrand("A", "Newer server A");
+    incoming.outreach.sequence.updated_at = "2026-10-08T07:01:00Z";
+    await switchBrand(rerender, incoming);
+    await user.click(screen.getByRole("button", { name: /Descartar cambios/ }));
+    expect(screen.getByLabelText("Subject").value).toBe("Newer server A");
+  });
   it("does not create a backend draft when required copy is blank", async () => {
     const user = userEvent.setup();
     await renderDrawer();
