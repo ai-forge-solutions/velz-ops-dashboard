@@ -103,3 +103,9 @@ const unconfigured = createSupabaseProxyHandler({
 });
 response = await unconfigured(request("/api/supabase/rest/brands", { headers: { cookie: sessionCookie } }));
 assert.equal(response.status, 503);
+
+// Netlify only registers custom routes declared as string literals.
+const { config } = await import("../netlify/functions/supabase-proxy.js");
+assert.equal(config.path, "/api/supabase/*");
+const source = (await import("node:fs")).readFileSync(new URL("../netlify/functions/supabase-proxy.js", import.meta.url), "utf8");
+assert.match(source, /path:\s*"\/api\/supabase\/\*"/);

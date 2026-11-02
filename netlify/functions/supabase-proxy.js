@@ -127,6 +127,7 @@ const getEnv = (key) => globalThis.Netlify?.env.get(key) ?? process.env[key];
 
 export default createSupabaseProxyHandler({ getEnv });
 
+// Netlify parses this statically: keep the path a plain string literal.
 export const config = {
-  path: `${PROXY_PREFIX}/*`,
+  path: "/api/supabase/*",
 };
