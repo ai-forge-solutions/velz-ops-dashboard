@@ -10,6 +10,7 @@ export const PROCESS_STEP_OPTIONS = [
 
 const VALID_STEP_IDS = new Set(PROCESS_STEP_OPTIONS.map((step) => step.id));
 const VALID_STEP_MODES = new Set(["preserve_success", "overwrite"]);
+const VALID_EMAIL_GENERATORS = new Set(["current", "skill_web"]);
 const VALID_EXECUTION_STRATEGIES = new Set(["serial", "parallel"]);
 
 export const PROCESS_RUN_TERMINAL_STATUSES = new Set(["success", "partial", "failed", "cancelled"]);
@@ -56,32 +57,34 @@ export function defaultProcessSteps() {
     id: step.id,
     enabled: !step.explicit,
     mode: step.defaultMode,
+    ...(step.id === "email_generation" ? { generator: "skill_web" } : {}),
   }));
 }
 
 export function normalizeProcessStep(step) {
   if (!step || !VALID_STEP_IDS.has(step.id)) return null;
-  return {
+  const normalized = {
     id: step.id,
     mode: VALID_STEP_MODES.has(step.mode) ? step.mode : PROCESS_STEP_OPTIONS.find((option) => option.id === step.id).defaultMode,
   };
+  if (step.id === "email_generation") {
+    normalized.generator = VALID_EMAIL_GENERATORS.has(step.generator) ? step.generator : "current";
+  }
+  return normalized;
 }
 
-export function resolveProcessBrandIds({ brands = [], selectedIds = new Set(), scope = "all", fitScoreMin = 70, limit = 500, groupBrandIds = [] } = {}) {
+export function resolveProcessBrandIds({ brands = [], selectedIds = new Set(), scope = "all", limit = 500, groupBrandIds = [] } = {}) {
   const groupIds = new Set(groupBrandIds || []);
   const rows = scope === "selected"
     ? brands.filter((brand) => selectedIds.has(brand.id))
     : scope === "group"
       ? brands.filter((brand) => groupIds.has(brand.id))
-      : scope === "fit_score"
-        ? brands.filter((brand) => Number(brand.fit ?? brand.fit_score ?? 0) >= Number(fitScoreMin))
-        : brands;
+      : brands;
   return rows.slice(0, Math.max(0, Number(limit) || 0)).map((brand) => brand.id);
 }
 
 export function buildProcessPayload({
   brandIds = [],
-  fitScoreMin = 70,
   limit = 500,
   steps = [],
   strategy = "serial",
@@ -96,7 +99,6 @@ export function buildProcessPayload({
   return {
     brand_ids: Array.from(new Set((brandIds || []).filter(Boolean))),
     filters: {
-      fit_score_min: Number(fitScoreMin),
       limit: Number(limit),
     },
     steps: normalizedSteps,

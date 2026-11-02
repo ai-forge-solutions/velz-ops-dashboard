@@ -9,16 +9,25 @@ Panel operativo diario del pipeline de Velz Auto-Outreach: marcas (filas) × mic
 ```bash
 npm install
 cp .env.example .env.local
-# rellena VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY y VITE_CONDUCTOR_BASE_URL
+# rellena VITE_CONDUCTOR_BASE_URL (Supabase va por el proxy del servidor; usa `netlify dev` con SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY)
 # opcional: VITE_OUTREACH_API_BASE_URL habilita generate/approve/reject/launch con rutas reales por defecto
 npm run dev
 ```
 
-La app necesita una `anon key` de Supabase con políticas RLS de solo lectura para `brands` y `service_runs`. No uses la service-role key en Vite/Netlify: cualquier variable `VITE_*` se publica al navegador.
+El navegador **no** habla con Supabase ni recibe ninguna key. Todas las lecturas y RPCs pasan por la Netlify Function `netlify/functions/supabase-proxy.js` (`/api/supabase/rest/<tabla>` y `/api/supabase/rpc/<fn>`), que verifica la misma cookie de sesión que la Edge Function y reenvía a `${SUPABASE_URL}/rest/v1/...` con la service-role key. Solo se permiten lecturas GET de una allowlist de tablas/vistas y POST a `save_brand_group`, `delete_brand_group` y `set_lead_magnet_tool_key`; el resto devuelve 403.
+
+Variables necesarias en Netlify (**Site settings → Environment variables**, scope **Functions**, nunca con prefijo `VITE_`):
+
+```bash
+SUPABASE_URL=https://ealbeiqstgqsdjmobxly.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role key, solo servidor>
+```
+
+`VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` ya no se usan y pueden borrarse de Netlify.
 
 ## Outreach / Saleshandy QA
 
-El dashboard carga una segunda capa operativa de Outreach desde Supabase: `v_lead_overview`, `email_sequences`, `email_sends`, `email_events`, `lead_magnet_events` y `email_suppression_entries`. Si esas lecturas no están concedidas a anon, la matriz de señales sigue cargando y Outreach muestra `Read blocked`; ver `docs/SUPABASE_OUTREACH_READS.md` para el SQL mínimo de lectura.
+El dashboard carga una segunda capa operativa de Outreach desde Supabase: `v_lead_overview`, `email_sequences`, `email_sends`, `email_events`, `lead_magnet_events` y `email_suppression_entries`. Se leen vía el proxy del servidor; si una lectura falla, la matriz de señales sigue cargando y Outreach muestra `Read blocked`.
 
 La UI muestra el journey `Readiness → Sequence → Review → Saleshandy → Engagement` con estados reales del read model/Supabase: `Not ready`, `Ready to generate`, `Draft pending review`, `Approved`, `Launch ready`, `Launch submitted`, `Imported/enrolled`, `Sent`, `Opened`, `Clicked`, `Replied`, `Failed` y `Suppressed`. Las acciones `Generate sequence`, `Approve`, `Reject` y `Launch Saleshandy` permanecen desactivadas hasta que haya una base configurada con `VITE_OUTREACH_API_BASE_URL` (o el alias legacy `VITE_OUTREACH_ORCHESTRATION_BASE_URL`). Con solo esa base, la app usa defaults reales: `POST /outreach/leads/{lead_id}/sequences/generate`, `POST /outreach/sequences/{sequence_id}/approve`, `POST /outreach/sequences/{sequence_id}/reject`, `PATCH /outreach/sequences/{sequence_id}/draft-fields` y `POST /outreach/sequences/{sequence_id}/launch-saleshandy`. Generate envía `{ requested_by, mode, force_regenerate }`; approve/reject usan `sequence_id` y envían `{ reviewed_by, notes }`; edit draft usa `sequence_id` y envía `{ edited_by, subject, initial_email, followups, notes }`; launch usa `sequence_id` en path y `{ lead_id, requested_by, allow_pending_review_for_qa }` en body. En Netlify, la Edge Function también publica estas variables públicas vía `/runtime-config.js`, así el dashboard puede usar cambios de entorno runtime sin quedar congelado al build de Vite.
 
@@ -69,6 +78,12 @@ VITE_CONDUCTOR_BASE_URL=https://velz-signals-conductor-stg.blackocean-de4b65c4.w
 ```
 
 Los servicios desplegados (`meta_ad_library_scraper`, `brand_reviews`, `web_stack_wappalyzer`, `shopify_signals`, `brand_context`) envían `{ "supabase_id": "<brands.id>" }` a sus endpoints del conductor. `shopify_signals` dispara `POST /microservices/shopify-signals`, que a su vez llama al microservicio Shopify ya integrado por el conductor. Los servicios sin endpoint (`similarweb`, `drafting`, `export`) se muestran como no desplegados y no disparan llamadas. El botón Pipeline usa `POST /microservices/run-all`; las ejecuciones individuales usan el endpoint de cada servicio. La pestaña Procesos prepara `{ brand_ids, filters, steps, execution }`, llama `POST /processes/preview`, crea el run con `POST /processes/runs`, lanza el executor con `POST /processes/runs/{id}/execute` y hace polling de `GET /processes/runs/{id}` para pintar la tabla real `brand × step`, modos, `service_run_id` y errores.
+
+### Selección de marcas en Procesos
+
+Los únicos scopes son **Seleccionadas**, **Grupo** y **Todas** (marcas cargadas en el dashboard). Todos conservan el límite configurado y admiten marcas con fit bajo, cero, nulo o sin score. El fit sigue siendo informativo en otras pantallas, pero no es un criterio de selección ni un filtro de procesos.
+
+El payload común de preview y creación envía `filters: { limit }`: nunca incluye `fit_score_min`. Selección manual, grupos, steps, motor de Drafting y opciones de ejecución mantienen su comportamiento.
 
 ## Estructura
 

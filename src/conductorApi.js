@@ -9,6 +9,7 @@ function envValue(key) {
 
 export const OUTREACH_DEFAULT_ACTION_PATHS = {
   generate: "/outreach/leads/{lead_id}/sequences/generate",
+  manualDraft: "/outreach/leads/{lead_id}/sequences/manual-draft",
   approve: "/outreach/sequences/{sequence_id}/approve",
   reject: "/outreach/sequences/{sequence_id}/reject",
   editDraft: "/outreach/sequences/{sequence_id}/draft-fields",
@@ -20,6 +21,7 @@ export const OUTREACH_DEFAULT_ACTION_PATHS = {
 
 const OUTREACH_ACTION_ENV_KEYS = {
   generate: ["VITE_OUTREACH_GENERATE_SEQUENCE_PATH"],
+  manualDraft: ["VITE_OUTREACH_CREATE_MANUAL_DRAFT_PATH"],
   approve: ["VITE_OUTREACH_APPROVE_SEQUENCE_PATH"],
   reject: ["VITE_OUTREACH_REJECT_SEQUENCE_PATH"],
   editDraft: ["VITE_OUTREACH_EDIT_SEQUENCE_DRAFT_PATH"],
@@ -318,13 +320,22 @@ export function saleshandyQaLaunchConfigured() {
   return outreachActionConfigured("launch");
 }
 
-export async function generateOutreachSequence(leadId) {
+export async function generateOutreachSequence(leadId, { requestedBy = "miguel", mode = "draft", forceRegenerate = false } = {}) {
   return outreachPost("generate", {
     leadId,
     body: {
-      requested_by: "miguel",
-      mode: "draft",
-      force_regenerate: false,
+      requested_by: requestedBy,
+      mode,
+      force_regenerate: forceRegenerate,
+    },
+  });
+}
+
+export async function createManualOutreachSequenceDraft(leadId, { requestedBy = "miguel" } = {}) {
+  return outreachPost("manualDraft", {
+    leadId,
+    body: {
+      requested_by: requestedBy,
     },
   });
 }

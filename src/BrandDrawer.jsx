@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  Copy,
   ExternalLink,
   Loader2,
   Maximize2,
@@ -19,6 +20,7 @@ import { loadBrandSource, loadLeadMagnetTools, setLeadMagnetToolKey } from "./su
 import { assignmentDisplay, groupToolsBySegment, isToolSelectionDirty, toolOptionLabel } from "./leadToolCatalog";
 import {
   approveOutreachSequence,
+  createManualOutreachSequenceDraft,
   editOutreachSequenceDraft,
   generateOutreachSequence,
   launchSaleshandyQaBulk,
@@ -121,6 +123,57 @@ function KeyValue({ label, value, href }) {
   );
 }
 
+function homepageHref(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "—") return null;
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw.replace(/^\/+/, "")}`;
+}
+
+function CopyButton({ value, label = "Copiar" }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) return null;
+  async function copyValue() {
+    try {
+      await navigator.clipboard?.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={copyValue}
+      className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium"
+      style={{ border: `1px solid ${COLORS.line}`, color: copied ? COLORS.green : COLORS.ink }}
+      title={label}
+    >
+      <Copy size={11} /> {copied ? "Copiado" : "Copiar"}
+    </button>
+  );
+}
+
+function leadContactName(outreach) {
+  const lead = outreach?.lead || {};
+  return lead.contactName || lead.person_name || lead.recipient_name || outreach?.sequence?.metadata?.outreach_name_cta_edit_2026_08_10?.recipient_name || null;
+}
+
+function LeadContactSummary({ outreach }) {
+  if (!outreach) return null;
+  const name = leadContactName(outreach);
+  const email = outreach.lead?.accountEmail || outreach.email || outreach.lead?.primary_email || outreach.lead?.email || null;
+  return (
+    <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}`, background: COLORS.wash }}>
+      <h4 className="mb-2 font-medium">Lead contact</h4>
+      <dl className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <KeyValue label="Nombre" value={name || "—"} />
+        <KeyValue label="Email account" value={email || "—"} />
+      </dl>
+    </section>
+  );
+}
+
 function ActionResult({ result }) {
   if (!result) return null;
   return (
@@ -147,9 +200,9 @@ function JourneyIndicator({ steps = [] }) {
 }
 
 function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSave, noEnviable = false, noEnviableReasons = [] }) {
-  if (!sequence) return <EmptyState>No hay draft de secuencia source-backed para este lead todavía.</EmptyState>;
-  const followups = Array.isArray(sequence.followups) ? sequence.followups : [];
-  const isEditing = editor.mode === "edit" || editor.mode === "saving";
+  const isEditing = editableState.editable && !noEnviable;
+  if (!sequence && !isEditing) return <EmptyState>No hay draft de secuencia source-backed para este lead todavía.</EmptyState>;
+  const followups = Array.isArray(sequence?.followups) ? sequence.followups : [];
   const isSaving = editor.mode === "saving";
 
   if (noEnviable && !isEditing) {
@@ -201,8 +254,8 @@ function SequencePreview({ sequence, editor, dispatchEditor, editableState, onSa
         </div>
         {editor.error && <EmptyState tone={COLORS.red}>Save failed: {editor.error.message}</EmptyState>}
         <div className="flex flex-wrap justify-end gap-2">
-          <button type="button" onClick={() => dispatchEditor({ type: "cancel", sequence })} disabled={isSaving} className="rounded px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}` }}>Cancel</button>
-          <button type="button" onClick={onSave} disabled={isSaving} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: COLORS.ink, color: "#fff" }}>{isSaving && <Loader2 size={13} className="animate-spin" />}{isSaving ? "Saving…" : "Save draft"}</button>
+          <button type="button" onClick={() => dispatchEditor({ type: "cancel", sequence })} disabled={isSaving} className="rounded px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}` }}>Descartar cambios</button>
+          <button type="button" onClick={onSave} disabled={isSaving} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: COLORS.ink, color: "#fff" }}>{isSaving ? "Guardando…" : "Guardar"}</button>
         </div>
       </div>
     );
@@ -424,6 +477,13 @@ function OutreachSection({ brand, onRefresh }) {
   const provider = outreach?.provider || {};
   const actionConfigured = outreach?.actionConfigured || {};
   const sequenceId = sequenceIdFor(sequence);
+  const createdSequenceId = useRef("");
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const [refreshError, setRefreshError] = useState(null);
   const [sequenceEditor, dispatchSequenceEditor] = useReducer(sequenceDraftReducer, {
     mode: "view",
     form: createSequenceDraftForm(sequence),
@@ -449,12 +509,14 @@ function OutreachSection({ brand, onRefresh }) {
   // edit gating must read the live runtime config directly on each render.
   const liveDiagnostics = outreachRuntimeDiagnostics();
   const editConfigured = Boolean(liveDiagnostics.editDraftConfigured);
-  const sequenceEditable = isSequenceDraftEditable({ sequence: displayedSequence, configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
+  const sequenceEditable = leadArchived
+    ? { editable: false, reason: "Lead archived: reactiva el lead antes de editar." }
+    : isSequenceDraftEditable({ sequence: displayedSequence || (outreach?.leadId && actionConfigured.generate ? { id: "unsaved" } : null), configured: editConfigured, lifecycleKey: outreach?.lifecycle?.key, provider });
   const sequenceIsEditing = sequenceEditor.mode === "edit" || sequenceEditor.mode === "saving";
 
   useEffect(() => {
-    dispatchSequenceEditor({ type: "cancel", sequence });
-  }, [sequenceId]);
+    dispatchSequenceEditor({ type: "sync", sequence });
+  }, [sequence]);
 
   useEffect(() => {
     setDiagnostics(liveDiagnostics);
@@ -472,20 +534,40 @@ function OutreachSection({ brand, onRefresh }) {
   }
 
   async function saveSequenceDraft() {
+    if (sequenceEditor.mode === "saving" || busyAction || !sequenceEditable.editable || noEnviable) return;
+    if (!sequenceEditor.form.subject.trim() || !sequenceEditor.form.initial_email.trim()) {
+      dispatchSequenceEditor({ type: "failed", error: new Error("Completa el asunto y el cuerpo antes de guardar.") });
+      return;
+    }
+    if (sequenceEditor.form.followups.some((followup) => !followup.body?.trim())) {
+      dispatchSequenceEditor({ type: "failed", error: new Error("Completa el cuerpo de cada followup o elimínalo antes de guardar.") });
+      return;
+    }
+    setRefreshError(null);
     dispatchSequenceEditor({ type: "saving" });
     try {
+      const savedSequenceId = sequenceIdFor(displayedSequence) || createdSequenceId.current || sequenceIdFor((await createManualOutreachSequenceDraft(outreach.leadId))?.sequence);
+      createdSequenceId.current = savedSequenceId;
       const result = await runSequenceDraftSave({
-        sequenceId,
+        sequenceId: savedSequenceId,
         form: sequenceEditor.form,
         save: editOutreachSequenceDraft,
-        refresh: onRefresh,
       });
-      dispatchSequenceEditor({ type: "saved", result, sequence });
-      setActionResult(result || { ok: true });
-      setActionError(null);
+      if (mounted.current) {
+        dispatchSequenceEditor({ type: "saved", result, sequence });
+        setActionResult(result || { ok: true });
+        setActionError(null);
+      }
     } catch (error) {
+      if (!mounted.current) return;
       dispatchSequenceEditor({ type: "failed", error });
       setActionError(error);
+      return;
+    }
+    try {
+      await onRefresh?.();
+    } catch (error) {
+      if (mounted.current) setRefreshError(error);
     }
   }
 
@@ -516,6 +598,7 @@ function OutreachSection({ brand, onRefresh }) {
           {outreach.suppression && <EmptyState tone={COLORS.red}>Suppression activa: {outreach.suppression.reason || outreach.suppression.type || "sin motivo"}. No enviar.</EmptyState>}
           {leadArchived && <EmptyState tone={COLORS.red}>Lead archived: oculto por defecto en el dashboard y con CTAs de Outreach desactivadas hasta reactivarlo.</EmptyState>}
           {outreach.blockers?.length > 0 && <EmptyState tone={COLORS.amber}>Bloqueos/backend warnings: {outreach.blockers.join(" · ")}</EmptyState>}
+          <LeadContactSummary outreach={outreach} />
 
           <section className="rounded-md p-3" style={{ border: `1px solid ${COLORS.line}` }}>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -525,9 +608,6 @@ function OutreachSection({ brand, onRefresh }) {
                 <button onClick={() => runAction("generate", () => generateOutreachSequence(outreach.leadId))} disabled={!canGenerate || busyAction} title={generateBlockedTitle} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ background: canGenerate ? COLORS.ink : COLORS.line, color: canGenerate ? "#fff" : COLORS.muted }}>
                   {busyAction === "generate" ? "Generating…" : "Generate"}
                 </button>
-                {displayedSequence && !sequenceIsEditing && (
-                  <button type="button" onClick={() => dispatchSequenceEditor({ type: "edit", sequence: displayedSequence })} disabled={!sequenceEditable.editable || noEnviable} title={noEnviable ? "No editable mientras está marcado No enviable; reactiva a draft primero." : sequenceEditable.reason || "Edit sequence draft"} className="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.line}`, color: sequenceEditable.editable && !noEnviable ? COLORS.ink : COLORS.muted }}><Pencil size={13} /> Edit draft</button>
-                )}
                 {sequenceId && !noEnviable && (
                   <button type="button" onClick={() => runAction("no_enviable", () => setOutreachSequenceStatus(sequenceId, "no_enviable", "Marked no_enviable from Velz Ops Dashboard."))} disabled={busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.amber}`, color: COLORS.amber }}>
                     {busyAction === "no_enviable" ? "Marcando…" : "Marcar no enviable"}
@@ -551,7 +631,7 @@ function OutreachSection({ brand, onRefresh }) {
               noEnviable={noEnviable}
               noEnviableReasons={outreach.noEnviableReasons || []}
             />
-            {!sequenceEditable.editable && <div className="mt-3"><OutreachDiagnostics diagnostics={diagnostics} probe={probeResult} busy={probeBusy} onProbe={runOutreachProbe} /></div>}
+            {refreshError && <EmptyState tone={COLORS.amber}>Guardado correctamente, pero no se pudo actualizar el dashboard: {refreshError.message}</EmptyState>}
             <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto_auto]">
               <input value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Optional reject note / requested changes" className="rounded px-3 py-2 text-xs" style={{ border: `1px solid ${COLORS.line}` }} />
               <button onClick={() => runAction("reject", () => rejectOutreachSequence(sequenceId, rejectNote))} disabled={!canReject || busyAction} className="rounded px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-45" style={{ border: `1px solid ${COLORS.red}`, color: COLORS.red }}>
@@ -1170,6 +1250,7 @@ export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand
   const canNavigateBrands = Boolean(onNavigateBrand && navigationIndex >= 0 && brandUniverse.length > 1);
   const previousBrand = canNavigateBrands ? brandUniverse[(navigationIndex - 1 + brandUniverse.length) % brandUniverse.length] : null;
   const nextBrand = canNavigateBrands ? brandUniverse[(navigationIndex + 1) % brandUniverse.length] : null;
+  const homepage = homepageHref(brand.websiteUrl || brand.domain);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" aria-modal="true" role="dialog">
@@ -1182,7 +1263,23 @@ export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand
               <OutreachPill tone={headerTone}>{brand.outreach?.readiness?.label || (brand.outreachLoadError ? "Read blocked" : "Not ready")}</OutreachPill>
               <OutreachPill tone={headerTone}>{brand.outreach?.lifecycle?.label || "Not launched"}</OutreachPill>
             </div>
-            <p className="mono text-[11px]" style={{ color: COLORS.muted }}>{brand.domain}</p>
+            <dl className="mt-2 space-y-1 text-[11px]">
+              <div className="flex flex-wrap items-center gap-2">
+                <dt style={{ color: COLORS.muted }}>Nombre de marca:</dt>
+                <dd className="font-medium">{brand.name}</dd>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <dt style={{ color: COLORS.muted }}>Homepage:</dt>
+                <dd className="mono break-all">
+                  {homepage ? (
+                    <a href={homepage} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 underline underline-offset-2">
+                      {homepage}<ExternalLink size={10} />
+                    </a>
+                  ) : "—"}
+                </dd>
+                <CopyButton value={homepage} label="Copiar homepage" />
+              </div>
+            </dl>
             {canNavigateBrands && (
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                 <button type="button" onClick={() => onNavigateBrand(previousBrand)} className="rounded px-2.5 py-1 font-medium" style={{ border: `1px solid ${COLORS.line}`, color: COLORS.ink }}>
@@ -1206,7 +1303,7 @@ export default function BrandDrawer({ brand, brandUniverse = [], onNavigateBrand
         </header>
 
         <main className="p-4 sm:p-6">
-          {!detailSource && <div className="mb-4"><OutreachSection brand={brand} onRefresh={onRefresh} /></div>}
+          {!detailSource && <div className="mb-4"><OutreachSection key={`${brand.id}:${brand.outreach?.leadId || ""}`} brand={brand} onRefresh={onRefresh} /></div>}
           {!hasRuns ? (
             <div className="rounded-lg p-4" style={{ border: `1px solid ${COLORS.line}`, background: COLORS.wash }}>
               <p className="mb-4 text-sm">Aún no se ha ejecutado ningún servicio para esta marca. Estas fuentes siguen pendientes:</p>

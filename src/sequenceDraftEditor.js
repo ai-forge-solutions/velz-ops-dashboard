@@ -62,34 +62,47 @@ export function isSequenceDraftEditable({ sequence, configured, lifecycleKey, pr
 
 export function sequenceDraftReducer(state, action) {
   switch (action.type) {
+    case "sync": {
+      if (state.dirty || state.mode === "saving") return state;
+      const confirmed = state.result?.sequence;
+      if (confirmed) {
+        const incomingId = sequenceIdFor(action.sequence);
+        const sameSequence = !incomingId || incomingId === sequenceIdFor(confirmed);
+        const caughtUp = incomingId && JSON.stringify(createSequenceDraftForm(action.sequence)) === JSON.stringify(createSequenceDraftForm(confirmed));
+        const version = (sequence) => Date.parse(sequence?.updated_at || sequence?.metadata?.last_edited_at || sequence?.reviewed_at || "");
+        const newer = version(action.sequence) > version(confirmed);
+        if (sameSequence && !caughtUp && !newer) return state;
+      }
+      return { ...state, form: createSequenceDraftForm(action.sequence), error: null, result: null, dirty: false };
+    }
     case "edit":
       return { ...state, mode: "edit", form: createSequenceDraftForm(action.sequence), error: null, result: null };
     case "cancel":
-      return { ...state, mode: "view", form: createSequenceDraftForm(action.sequence), error: null };
+      return { ...state, mode: "view", form: createSequenceDraftForm(action.sequence), error: null, dirty: false };
     case "field":
-      return { ...state, form: { ...state.form, [action.field]: action.value } };
+      return { ...state, dirty: true, form: { ...state.form, [action.field]: action.value } };
     case "followup": {
       const followups = [...(state.form.followups || [])];
       followups[action.index] = { ...followups[action.index], [action.field]: action.value };
-      return { ...state, form: { ...state.form, followups } };
+      return { ...state, dirty: true, form: { ...state.form, followups } };
     }
     case "addFollowup": {
       const followups = [...(state.form.followups || [])];
       followups.push({ step: followups.length + 1, kind: "follow_up", subject: "", body: "" });
-      return { ...state, form: { ...state.form, followups } };
+      return { ...state, dirty: true, form: { ...state.form, followups } };
     }
     case "removeFollowup": {
       const followups = (state.form.followups || [])
         .filter((_, index) => index !== action.index)
         .map((followup, index) => ({ ...followup, step: index + 1 }));
-      return { ...state, form: { ...state.form, followups } };
+      return { ...state, dirty: true, form: { ...state.form, followups } };
     }
     case "saving":
-      return { ...state, mode: "saving", error: null, result: null };
+      return { ...state, mode: "saving", error: null };
     case "saved":
-      return { ...state, mode: "view", error: null, result: action.result, form: createSequenceDraftForm(action.result?.sequence || action.sequence) };
+      return { ...state, mode: "view", dirty: false, error: null, result: action.result, form: createSequenceDraftForm(action.result?.sequence || action.sequence) };
     case "failed":
-      return { ...state, mode: "edit", error: action.error, result: null };
+      return { ...state, mode: "edit", error: action.error };
     default:
       return state;
   }

@@ -5,18 +5,23 @@ import userEvent from "@testing-library/user-event";
 
 const mockLoadDashboardBrands = vi.fn();
 const mockLoadBrandGroups = vi.fn();
+const mockLoadRecentProcessRuns = vi.fn();
 const mockSaveBrandGroup = vi.fn();
 const mockDeleteBrandGroup = vi.fn();
 const mockRunConductorService = vi.fn();
 const mockGetMetaAdLibraryRun = vi.fn();
 const mockGenerateOutreachSequence = vi.fn();
 const mockPreviewProcess = vi.fn();
+const mockRunProcess = vi.fn();
+const mockExecuteProcess = vi.fn();
+const mockGetProcessRun = vi.fn();
 const mockSetBrandGroupArchived = vi.fn();
 const mockSetLeadArchived = vi.fn();
 
 vi.mock("./supabaseData", () => ({
   loadDashboardBrands: mockLoadDashboardBrands,
   loadBrandGroups: mockLoadBrandGroups,
+  loadRecentProcessRuns: mockLoadRecentProcessRuns,
   saveBrandGroup: mockSaveBrandGroup,
   deleteBrandGroup: mockDeleteBrandGroup,
 }));
@@ -29,12 +34,12 @@ vi.mock("./conductorApi", async () => {
     generateOutreachSequence: mockGenerateOutreachSequence,
     runConductorPipeline: vi.fn(),
     getMetaAdLibraryRun: mockGetMetaAdLibraryRun,
-    getProcessRun: vi.fn(),
+    getProcessRun: mockGetProcessRun,
     previewProcess: mockPreviewProcess,
     setBrandGroupArchived: mockSetBrandGroupArchived,
     setLeadArchived: mockSetLeadArchived,
-    runProcess: vi.fn(),
-    executeProcess: vi.fn(),
+    runProcess: mockRunProcess,
+    executeProcess: mockExecuteProcess,
   };
 });
 
@@ -126,15 +131,20 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   delete globalThis.__VELZ_RUNTIME_CONFIG__;
+  window.localStorage.clear();
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {} }]);
   mockLoadBrandGroups.mockResolvedValue([]);
+  mockLoadRecentProcessRuns.mockResolvedValue([]);
   mockSaveBrandGroup.mockResolvedValue({ id: "group-1", name: "Grupo QA", description: "", brandCount: 1, brandIds: [brand.id] });
   mockDeleteBrandGroup.mockResolvedValue(undefined);
   mockPreviewProcess.mockResolvedValue({ brand_count: 1, total_items_estimated: 5 });
+  mockRunProcess.mockResolvedValue({ process_run_id: "run-new-123", status: "queued", created_at: "2026-10-07T10:15:00Z" });
+  mockExecuteProcess.mockResolvedValue({ status: "success", message: "ok" });
+  mockGetProcessRun.mockResolvedValue({ id: "run-new-123", status: "queued", brand_count: 1, item_count: 5, steps: ["brand_context"], items: [] });
   mockRunConductorService.mockResolvedValue({
     success: true,
     status: "success",
@@ -145,6 +155,33 @@ beforeEach(() => {
   mockGenerateOutreachSequence.mockResolvedValue({ message: "Drafting completado.", sequence: generatedSequence });
   mockSetBrandGroupArchived.mockResolvedValue({ affected_lead_count: 2 });
   mockSetLeadArchived.mockResolvedValue({ ok: true });
+});
+
+describe("Processes without fit filtering", () => {
+  it.each(["selected", "group", "all"])("previews %s low/null-score brands with no fit control or filter", async (scope) => {
+    const user = userEvent.setup();
+    mockLoadDashboardBrands.mockResolvedValue([
+      { ...brand, fit: 1 }, { ...secondBrand, fit: null },
+    ]);
+    mockLoadBrandGroups.mockResolvedValue([
+      { ...qaGroup, brandCount: 2, brandIds: [brand.id, secondBrand.id] },
+    ]);
+    await renderLoadedApp();
+    await user.click(screen.getByRole("button", { name: /Seleccionar visibles/i }));
+    await user.click(screen.getByRole("button", { name: "Procesos" }));
+    expect(screen.queryByText(/Fit score/i)).toBeNull();
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    const scopeName = { selected: /Seleccionadas/i, group: /Grupo/i, all: /Todas/i }[scope];
+    await user.click(screen.getByRole("radio", { name: scopeName }));
+    await user.click(screen.getByRole("button", { name: /Preview real/i }));
+    await waitFor(() => expect(mockPreviewProcess).toHaveBeenCalledTimes(1));
+    const payload = mockPreviewProcess.mock.calls[0][0];
+    expect(payload.brand_ids).toEqual([brand.id, secondBrand.id]);
+    expect(payload.filters).toEqual({ limit: 500 });
+    expect(payload.steps.find((step) => step.id === "email_generation").generator).toBe("skill_web");
+    expect(mockRunProcess).not.toHaveBeenCalled();
+    expect(mockExecuteProcess).not.toHaveBeenCalled();
+  });
 });
 
 describe("Brand group MVP", () => {
@@ -237,7 +274,7 @@ describe("Brand group MVP", () => {
     expect(within(table).getAllByRole("checkbox").filter((checkbox) => checkbox.checked)).toHaveLength(1);
   });
 
-  it("sends group brand_ids to the real process preview payload", async () => {
+  it("sends group brand_ids and the default Skill web generator to the real process preview payload", async () => {
     const user = userEvent.setup();
     mockLoadDashboardBrands.mockResolvedValue([{ ...brand, runs: {} }, { ...secondBrand, runs: {} }]);
     mockLoadBrandGroups.mockResolvedValue([qaGroup]);
@@ -245,11 +282,72 @@ describe("Brand group MVP", () => {
     await renderLoadedApp();
     await user.click(screen.getByRole("button", { name: "Procesos" }));
     await user.click(screen.getByRole("radio", { name: /Grupo/i }));
+
+    const generatorSelect = screen.getByRole("combobox", { name: /Motor de Drafting/i });
+    expect(generatorSelect.value).toBe("skill_web");
     await user.click(screen.getByRole("button", { name: /Preview real/i }));
 
     await waitFor(() => expect(mockPreviewProcess).toHaveBeenCalled());
     expect(mockPreviewProcess.mock.calls[0][0].brand_ids).toEqual([brand.id]);
+    expect(mockPreviewProcess.mock.calls[0][0].steps).toContainEqual({ id: "email_generation", mode: "overwrite", generator: "skill_web" });
     expect(screen.getByText("Preview real generado por el backend de procesos.")).toBeTruthy();
+  });
+
+  it("allows selecting the current generator and carries it through preview", async () => {
+    const user = userEvent.setup();
+    await renderLoadedApp();
+    await user.click(screen.getByRole("button", { name: "Procesos" }));
+    await user.click(screen.getByRole("radio", { name: /Todas/i }));
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /Motor de Drafting/i }), "current");
+    await user.click(screen.getByRole("button", { name: /Preview real/i }));
+
+    await waitFor(() => expect(mockPreviewProcess).toHaveBeenCalled());
+    expect(mockPreviewProcess.mock.calls[0][0].steps).toContainEqual({ id: "email_generation", mode: "overwrite", generator: "current" });
+  });
+
+  it("loads recent process runs from Supabase into a simple dropdown and loads one without retyping the ID", async () => {
+    const user = userEvent.setup();
+    mockLoadRecentProcessRuns.mockResolvedValue([
+      {
+        id: "run-old-456",
+        created_at: "2026-10-07T09:30:00Z",
+        status: "success",
+        brand_count: 2,
+        item_count: 4,
+        request_payload: { steps: [{ id: "brand_context" }, { id: "email_generation" }] },
+      },
+      {
+        id: "run-web-789",
+        created_at: "2026-10-07T10:30:00Z",
+        status: "success",
+        brand_count: 1,
+        item_count: 1,
+        request_payload: { steps: [{ id: "email_generation", generator: "skill_web" }] },
+      },
+    ]);
+    mockGetProcessRun.mockResolvedValue({
+      id: "run-old-456",
+      status: "success",
+      brand_count: 2,
+      item_count: 4,
+      steps: ["brand_context", "email_generation"],
+      items: [],
+    });
+
+    await renderLoadedApp();
+    await user.click(screen.getByRole("button", { name: "Procesos" }));
+
+    await waitFor(() => expect(mockLoadRecentProcessRuns).toHaveBeenCalledWith({ limit: 20 }));
+    const recentSelect = screen.getByRole("combobox", { name: /Procesos recientes/i });
+    expect(within(recentSelect).getByRole("option", { name: /7\/10.*2 marcas.*Contexto de marca \+ Drafting \(Actual — datos recopilados\).*success.*#old-456/i })).toBeTruthy();
+    expect(within(recentSelect).getByRole("option", { name: /7\/10.*1 marca.*Drafting \(Skill web — investigación de la tienda\).*success.*#web-789/i })).toBeTruthy();
+
+    await user.selectOptions(recentSelect, "run-old-456");
+
+    await waitFor(() => expect(mockGetProcessRun).toHaveBeenCalledWith("run-old-456"));
+    expect(screen.getByText(/proceso:/i).textContent).toMatch(/2 marcas/);
+    expect(screen.getByText(/proceso:/i).textContent).not.toMatch(/process_run_id:/i);
   });
 
   it("hides archived leads by default and reveals them with the archived toggle", async () => {

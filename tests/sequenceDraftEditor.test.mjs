@@ -87,6 +87,14 @@ const saved = await runSequenceDraftSave({
 assert.equal(saved.sequence.review_status, "pending_review");
 assert.equal(refreshCount, 1);
 
+const confirmedSequence = { ...baseSequence, subject: "Confirmed new subject" };
+const confirmedState = sequenceDraftReducer(edited, { type: "saved", result: { sequence: confirmedSequence }, sequence: baseSequence });
+const staleRefresh = sequenceDraftReducer(confirmedState, { type: "sync", sequence: { ...baseSequence } });
+assert.equal(staleRefresh.form.subject, "Confirmed new subject", "stale reads must not replace confirmed copy");
+const echoedRefresh = sequenceDraftReducer(confirmedState, { type: "sync", sequence: { ...confirmedSequence } });
+assert.equal(echoedRefresh.form.subject, "Confirmed new subject");
+assert.equal(echoedRefresh.result, null, "clear local response when read model catches up");
+
 await assert.rejects(
   () => runSequenceDraftSave({
     sequenceId: "seq_001",

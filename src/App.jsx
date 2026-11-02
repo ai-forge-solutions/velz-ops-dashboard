@@ -3,7 +3,7 @@ import {
   Check, X, Loader2, Clock, AlertTriangle, Minus, Play, Search,
   ChevronDown, Plus, Trash2, PlayCircle, Users, ChevronRight, Info, RotateCcw
 } from "lucide-react";
-import { deleteBrandGroup, loadBrandGroups, loadDashboardBrands, saveBrandGroup } from "./supabaseData";
+import { deleteBrandGroup, loadBrandGroups, loadDashboardBrands, loadRecentProcessRuns, saveBrandGroup } from "./supabaseData";
 import {
   conductorServiceAvailable,
   executeProcess,
@@ -82,6 +82,76 @@ function fmtTime(iso) {
   const d = new Date(iso);
   return d.toLocaleString("es-ES", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
+
+const PROCESS_RUN_HISTORY_KEY = "velz.processRunHistory.v1";
+const MAX_PROCESS_RUN_HISTORY = 20;
+const EMAIL_GENERATOR_LABELS = {
+  current: "Actual — datos recopilados",
+  skill_web: "Skill web — investigación de la tienda",
+};
+
+function normalizeProcessHistoryStep(step) {
+  if (!step) return null;
+  if (typeof step === "string") return { id: step };
+  const id = step.id || step.step_id;
+  if (!id) return null;
+  return {
+    id,
+    ...(id === "email_generation" ? { generator: step.generator || "current" } : {}),
+  };
+}
+
+function processStepHistoryLabel(step) {
+  const normalized = normalizeProcessHistoryStep(step);
+  if (!normalized) return "";
+  const label = processStepLabel(normalized.id);
+  if (normalized.id !== "email_generation") return label;
+  return `${label} (${EMAIL_GENERATOR_LABELS[normalized.generator || "current"]})`;
+}
+
+function shortProcessRunId(processRunId) {
+  if (!processRunId) return "—";
+  const value = String(processRunId);
+  return value.length <= 8 ? value : value.slice(-8).replace(/^[-_]+/, "");
+}
+
+function normalizeProcessRunHistoryEntry(input = {}) {
+  const id = input.id || input.process_run_id || input.run_id;
+  if (!id) return null;
+  return {
+    id: String(id),
+    createdAt: input.created_at || input.createdAt || input.started_at || input.updated_at || input.lastSeenAt || new Date().toISOString(),
+    lastSeenAt: input.lastSeenAt || input.updated_at || new Date().toISOString(),
+    status: input.status || "queued",
+    brandCount: input.brand_count ?? input.brandCount ?? input.payload?.brand_ids?.length ?? null,
+    itemCount: input.item_count ?? input.itemCount ?? (Array.isArray(input.items) ? input.items.length : null),
+    steps: Array.isArray(input.steps)
+      ? input.steps.map(normalizeProcessHistoryStep).filter(Boolean)
+      : Array.isArray(input.payload?.steps)
+        ? input.payload.steps.map(normalizeProcessHistoryStep).filter(Boolean)
+        : Array.isArray(input.request_payload?.steps)
+          ? input.request_payload.steps.map(normalizeProcessHistoryStep).filter(Boolean)
+          : [],
+  };
+}
+
+function loadProcessRunHistory() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(PROCESS_RUN_HISTORY_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.map(normalizeProcessRunHistoryEntry).filter(Boolean).slice(0, MAX_PROCESS_RUN_HISTORY) : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function processRunHistoryLabel(entry) {
+  const created = fmtTime(entry.createdAt);
+  const brandText = entry.brandCount != null ? `${entry.brandCount} marca${Number(entry.brandCount) === 1 ? "" : "s"}` : "proceso";
+  const stepText = entry.steps?.length ? entry.steps.map(processStepHistoryLabel).filter(Boolean).join(" + ") : `${entry.itemCount ?? "—"} items`;
+  const status = entry.status ? ` · ${entry.status}` : "";
+  return `${created} · ${brandText} · ${stepText}${status} · #${shortProcessRunId(entry.id)}`;
+}
+
 function statusOf(brand, key) {
   return brand.runs?.[key]?.status || "not_run";
 }
@@ -1276,7 +1346,6 @@ function OutreachView({ brands, loading, error, openBrandDrawer, showArchived, s
 function ProcessesView({ brands, selected, brandGroups, actionMessage, setActionMessage, clearActionMessage }) {
   const [scope, setScope] = useState("selected");
   const [processGroupId, setProcessGroupId] = useState("");
-  const [fitScoreMin, setFitScoreMin] = useState(70);
   const [limit, setLimit] = useState(500);
   const [steps, setSteps] = useState(defaultProcessSteps);
   const [strategy, setStrategy] = useState("serial");
@@ -1288,6 +1357,9 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
   const [activeProcessRunId, setActiveProcessRunId] = useState(() => new URLSearchParams(window.location.search).get("process_run_id") || "");
   const [processRunInput, setProcessRunInput] = useState(() => new URLSearchParams(window.location.search).get("process_run_id") || "");
   const [processRunDetail, setProcessRunDetail] = useState(null);
+  const [processRunHistory, setProcessRunHistory] = useState(loadProcessRunHistory);
+  const [loadingProcessHistory, setLoadingProcessHistory] = useState(false);
+  const [processHistoryError, setProcessHistoryError] = useState(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -1295,14 +1367,14 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
 
   const selectedProcessGroup = brandGroups.find((group) => group.id === processGroupId) || brandGroups[0] || null;
   const groupBrandIds = selectedProcessGroup?.brandIds || [];
-  const brandIds = resolveProcessBrandIds({ brands, selectedIds: selected, scope, fitScoreMin, limit, groupBrandIds });
-  const payload = buildProcessPayload({ brandIds, fitScoreMin, limit, steps, strategy, maxConcurrency, continueOnError });
+  const brandIds = resolveProcessBrandIds({ brands, selectedIds: selected, scope, limit, groupBrandIds });
+  const payload = buildProcessPayload({ brandIds, limit, steps, strategy, maxConcurrency, continueOnError });
   const currentSignature = payloadSignature(payload);
   const previewIsCurrent = validatedSignature === currentSignature;
   const selectedSteps = payload.steps;
   const executionPayload = payload.execution;
 
-  function rememberProcessRunId(processRunId) {
+  function rememberProcessRunId(processRunId, metadata = {}) {
     setActiveProcessRunId(processRunId);
     setProcessRunInput(processRunId);
     const url = new URL(window.location.href);
@@ -1312,6 +1384,48 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
       url.searchParams.delete("process_run_id");
     }
     window.history.replaceState({}, "", url);
+
+    const entry = normalizeProcessRunHistoryEntry({ id: processRunId, ...metadata });
+    if (!entry) return;
+    setProcessRunHistory((current) => {
+      const previous = current.find((item) => item.id === entry.id) || {};
+      const nextEntry = {
+        ...previous,
+        ...entry,
+        steps: entry.steps?.length ? entry.steps : previous.steps || [],
+        brandCount: entry.brandCount ?? previous.brandCount ?? null,
+        itemCount: entry.itemCount ?? previous.itemCount ?? null,
+      };
+      const next = [nextEntry, ...current.filter((item) => item.id !== entry.id)].slice(0, MAX_PROCESS_RUN_HISTORY);
+      try {
+        window.localStorage.setItem(PROCESS_RUN_HISTORY_KEY, JSON.stringify(next));
+      } catch (error) {
+        // Browser storage can be unavailable in private mode; the in-memory dropdown still works.
+      }
+      return next;
+    });
+  }
+
+
+  function mergeProcessRunHistory(entries) {
+    const normalizedEntries = (entries || []).map(normalizeProcessRunHistoryEntry).filter(Boolean);
+    if (normalizedEntries.length === 0) return;
+    setProcessRunHistory((current) => {
+      const byId = new Map();
+      for (const entry of [...normalizedEntries, ...current]) {
+        if (!entry?.id || byId.has(entry.id)) continue;
+        byId.set(entry.id, entry);
+      }
+      const next = Array.from(byId.values())
+        .sort((a, b) => new Date(b.createdAt || b.lastSeenAt || 0).getTime() - new Date(a.createdAt || a.lastSeenAt || 0).getTime())
+        .slice(0, MAX_PROCESS_RUN_HISTORY);
+      try {
+        window.localStorage.setItem(PROCESS_RUN_HISTORY_KEY, JSON.stringify(next));
+      } catch (error) {
+        // Keep the loaded dropdown in memory if browser storage is unavailable.
+      }
+      return next;
+    });
   }
 
   async function refreshProcessRun(processRunId = activeProcessRunId, { quiet = false } = {}) {
@@ -1320,8 +1434,7 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
     try {
       const detail = await getProcessRun(processRunId);
       setProcessRunDetail(detail);
-      setActiveProcessRunId(detail?.id || processRunId);
-      setProcessRunInput(detail?.id || processRunId);
+      rememberProcessRunId(detail?.id || processRunId, detail || {});
       return detail;
     } catch (error) {
       if (!quiet) setActionMessage({ tone: "error", text: `No se pudo leer process_run_id ${processRunId}: ${error.message}` });
@@ -1371,8 +1484,13 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
       setRunResult(result || {});
       const processRunId = result?.process_run_id || result?.id || result?.run_id;
       if (!processRunId) throw new Error("El backend creó el proceso sin devolver process_run_id.");
-      rememberProcessRunId(processRunId);
-      setActionMessage({ tone: "success", text: `Proceso creado · process_run_id ${processRunId}. Lanzando ejecución backend…` });
+      rememberProcessRunId(processRunId, {
+        ...result,
+        status: result?.status || "queued",
+        brandCount: payload.brand_ids.length,
+        steps: payload.steps,
+      });
+      setActionMessage({ tone: "success", text: `Proceso creado · ${processRunHistoryLabel(normalizeProcessRunHistoryEntry({ id: processRunId, ...result, brandCount: payload.brand_ids.length, steps: payload.steps }))}. Lanzando ejecución backend…` });
       await refreshProcessRun(processRunId, { quiet: true });
       setExecutingRunId(processRunId);
       executeProcess(processRunId, executionPayload)
@@ -1400,13 +1518,42 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
     await refreshProcessRun(processRunId);
   }
 
+  async function handleSelectStoredRun(event) {
+    const processRunId = event.target.value;
+    if (!processRunId) return;
+    rememberProcessRunId(processRunId);
+    await refreshProcessRun(processRunId);
+  }
+
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadStoredProcessRuns() {
+      setLoadingProcessHistory(true);
+      setProcessHistoryError(null);
+      try {
+        const rows = await loadRecentProcessRuns({ limit: MAX_PROCESS_RUN_HISTORY });
+        if (!cancelled) mergeProcessRunHistory(rows);
+      } catch (error) {
+        if (!cancelled) setProcessHistoryError(error);
+      } finally {
+        if (!cancelled) setLoadingProcessHistory(false);
+      }
+    }
+    loadStoredProcessRuns();
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(() => {
     if (!activeProcessRunId) return undefined;
     let cancelled = false;
     async function pollProcessRun() {
       try {
         const detail = await getProcessRun(activeProcessRunId);
-        if (!cancelled) setProcessRunDetail(detail);
+        if (!cancelled) {
+          setProcessRunDetail(detail);
+          rememberProcessRunId(detail?.id || activeProcessRunId, detail || {});
+        }
       } catch (error) {
         if (!cancelled) setActionMessage({ tone: "error", text: `Polling de process_run_id ${activeProcessRunId} falló: ${error.message}` });
       }
@@ -1455,7 +1602,7 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
 
         <section className="mb-5">
           <label className="mb-2 block text-[11px]" style={{ color: COLORS.muted }}>Marcas</label>
-          <div className="grid gap-2 text-xs sm:grid-cols-4">
+          <div className="grid gap-2 text-xs sm:grid-cols-3">
             <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "selected" ? COLORS.ink : COLORS.line}` }}>
               <input type="radio" checked={scope === "selected"} onChange={() => { setScope("selected"); resetPreviewState(); }} className="mr-2" />
               Seleccionadas ({selected.size})
@@ -1472,11 +1619,6 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
               >
                 {brandGroups.length === 0 ? <option value="">Sin grupos</option> : brandGroups.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.brandCount})</option>)}
               </select>
-            </label>
-            <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "fit_score" ? COLORS.ink : COLORS.line}` }}>
-              <input type="radio" checked={scope === "fit_score"} onChange={() => { setScope("fit_score"); resetPreviewState(); }} className="mr-2" />
-              Fit score ≥
-              <input type="number" value={fitScoreMin} onChange={e => { setFitScoreMin(Number(e.target.value)); resetPreviewState(); }} className="ml-2 w-14 mono rounded px-1 py-0.5" style={{ border: `1px solid ${COLORS.line}` }} />
             </label>
             <label className="rounded-md p-3" style={{ border: `1px solid ${scope === "all" ? COLORS.ink : COLORS.line}` }}>
               <input type="radio" checked={scope === "all"} onChange={() => { setScope("all"); resetPreviewState(); }} className="mr-2" />
@@ -1509,6 +1651,22 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
                       <option value="overwrite">overwrite</option>
                     </select>
                   </div>
+                  {option.id === "email_generation" && (
+                    <div className="mt-2 flex flex-col gap-1 text-[11px] sm:flex-row sm:items-center sm:justify-between" style={{ color: COLORS.muted }}>
+                      <span>Motor para borrador</span>
+                      <select
+                        aria-label="Motor de Drafting"
+                        disabled={!enabled}
+                        value={step?.generator || "current"}
+                        onChange={(event) => updateStep(option.id, { generator: event.target.value })}
+                        className="rounded px-2 py-1 text-xs"
+                        style={{ border: `1px solid ${COLORS.line}` }}
+                      >
+                        <option value="current">{EMAIL_GENERATOR_LABELS.current}</option>
+                        <option value="skill_web">{EMAIL_GENERATOR_LABELS.skill_web}</option>
+                      </select>
+                    </div>
+                  )}
                   {option.id === "email_send" && (
                     <p className="mt-2 text-[11px]" style={{ color: COLORS.amber }}>
                       Envío real: actívalo solo si quieres lanzar emails ahora. No se bloquea después de seleccionarlo explícitamente.
@@ -1593,12 +1751,27 @@ function ProcessesView({ brands, selected, brandGroups, actionMessage, setAction
             </div>
             {loadingDetail && <Loader2 size={14} className="animate-spin" color={COLORS.muted} />}
           </div>
-          <form onSubmit={handleLoadRun} className="mb-3 flex gap-2">
-            <input value={processRunInput} onChange={e => setProcessRunInput(e.target.value)} placeholder="process_run_id" className="min-w-0 flex-1 rounded px-2 py-1 mono text-[11px]" style={{ border: `1px solid ${COLORS.line}` }} />
-            <button type="submit" className="rounded px-2 py-1 font-medium" style={{ background: COLORS.ink, color: "#fff" }}>Cargar</button>
-          </form>
-          {processRunId && <p className="mb-2">process_run_id: <span className="mono break-all">{processRunId}</span></p>}
-          {!processRunDetail && <p style={{ color: COLORS.muted }}>Crea un proceso o pega un process_run_id existente para ver historial/progreso.</p>}
+          <div className="mb-3 space-y-2">
+            <select
+              aria-label="Procesos recientes"
+              value={processRunHistory.some((entry) => entry.id === processRunInput) ? processRunInput : ""}
+              onChange={handleSelectStoredRun}
+              className="w-full rounded px-2 py-1 text-[11px]"
+              style={{ border: `1px solid ${COLORS.line}`, color: processRunHistory.length ? COLORS.ink : COLORS.muted }}
+            >
+              <option value="">{loadingProcessHistory ? "Cargando procesos recientes…" : processRunHistory.length ? "Selecciona un proceso reciente…" : "Sin procesos recientes"}</option>
+              {processRunHistory.map((entry) => (
+                <option key={entry.id} value={entry.id}>{processRunHistoryLabel(entry)}</option>
+              ))}
+            </select>
+            <form onSubmit={handleLoadRun} className="flex gap-2">
+              <input value={processRunInput} onChange={e => setProcessRunInput(e.target.value)} placeholder="process_run_id manual (opcional)" className="min-w-0 flex-1 rounded px-2 py-1 mono text-[11px]" style={{ border: `1px solid ${COLORS.line}` }} />
+              <button type="submit" className="rounded px-2 py-1 font-medium" style={{ background: COLORS.ink, color: "#fff" }}>Cargar</button>
+            </form>
+          </div>
+          {processHistoryError && <p className="mb-2" style={{ color: COLORS.amber }}>No se pudo cargar el historial de procesos: {processHistoryError.message}</p>}
+          {processRunId && <p className="mb-2">proceso: <span>{processRunHistoryLabel(normalizeProcessRunHistoryEntry(processRunDetail || processRunHistory.find((entry) => entry.id === processRunId) || { id: processRunId }))}</span></p>}
+          {!processRunDetail && <p style={{ color: COLORS.muted }}>Crea un proceso, elige uno reciente o pega un process_run_id existente para ver historial/progreso.</p>}
           {processRunDetail && (
             <div className="space-y-3">
               <div className="grid grid-cols-3 gap-2">
