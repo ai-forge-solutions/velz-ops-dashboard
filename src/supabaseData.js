@@ -133,31 +133,19 @@ const BRAND_GROUP_FIELDS = [
   "updated_at",
 ].join(",");
 
-function requireSupabaseConfig() {
-  const supabaseUrl = envValue("VITE_SUPABASE_URL");
-  const supabaseAnonKey = envValue("VITE_SUPABASE_ANON_KEY");
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error(
-      "Faltan VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY para leer datos reales de Supabase."
-    );
-  }
-
-  return {
-    url: supabaseUrl.replace(/\/$/, ""),
-    key: supabaseAnonKey,
-  };
-}
+// Supabase is reached only through the same-origin Netlify proxy
+// (netlify/functions/supabase-proxy.js), which holds the server-side key.
+const SUPABASE_PROXY_BASE = "/api/supabase";
 
 async function supabaseRest(path, searchParams = new URLSearchParams()) {
-  const { url, key } = requireSupabaseConfig();
-  const endpoint = new URL(`${url}/rest/v1/${path}`);
-  searchParams.forEach((value, name) => endpoint.searchParams.set(name, value));
+  const params = new URLSearchParams();
+  searchParams.forEach((value, name) => params.set(name, value));
+  const query = params.toString();
+  const endpoint = `${SUPABASE_PROXY_BASE}/rest/${path}${query ? `?${query}` : ""}`;
 
   const response = await fetch(endpoint, {
+    credentials: "same-origin",
     headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
       Accept: "application/json",
     },
   });
@@ -171,12 +159,10 @@ async function supabaseRest(path, searchParams = new URLSearchParams()) {
 }
 
 async function supabaseRpc(functionName, body) {
-  const { url, key } = requireSupabaseConfig();
-  const response = await fetch(`${url}/rest/v1/rpc/${functionName}`, {
+  const response = await fetch(`${SUPABASE_PROXY_BASE}/rpc/${functionName}`, {
     method: "POST",
+    credentials: "same-origin",
     headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
       Accept: "application/json",
       "Content-Type": "application/json",
     },
@@ -334,6 +320,39 @@ function idsForInFilter(ids) {
   return Array.from(new Set(ids.filter(Boolean))).join(",");
 }
 
+// Netlify rejects long request URLs (414), so `in.(...)` filters are split into
+// chunks whose encoded value stays well under that limit.
+const IN_FILTER_MAX_ENCODED_LENGTH = 4000;
+
+export function chunkInFilterValues(values, maxEncodedLength = IN_FILTER_MAX_ENCODED_LENGTH) {
+  const unique = Array.from(new Set(values.filter(Boolean)));
+  const chunks = [];
+  let current = [];
+  let length = 0;
+  for (const value of unique) {
+    const size = encodeURIComponent(`${value},`).length;
+    if (current.length > 0 && length + size > maxEncodedLength) {
+      chunks.push(current);
+      current = [];
+      length = 0;
+    }
+    current.push(value);
+    length += size;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+// Runs one request per chunk and concatenates the rows. Each value lands in a
+// single chunk, so per-key ordering from `order=` is preserved.
+async function supabaseRestIn(path, values, buildParams) {
+  const chunks = chunkInFilterValues(values);
+  const results = await Promise.all(
+    chunks.map((chunk) => supabaseRest(path, buildParams(chunk.join(",")))),
+  );
+  return results.flat();
+}
+
 export function buildMetaScrapeParams(brandIds) {
   const ids = Array.isArray(brandIds) ? idsForInFilter(brandIds) : brandIds;
   return new URLSearchParams({
@@ -346,42 +365,40 @@ export function buildMetaScrapeParams(brandIds) {
 
 async function loadOutreachForBrands(brands) {
   if (brands.length === 0) return new Map();
-  const brandIds = idsForInFilter(brands.map((brand) => brand.id));
-  const leadParams = new URLSearchParams({
+  const brandIds = brands.map((brand) => brand.id);
+  const leads = await supabaseRestIn("v_lead_overview", brandIds, (ids) => new URLSearchParams({
     select: "*",
-    brand_id: `in.(${brandIds})`,
+    brand_id: `in.(${ids})`,
+    limit: OUTREACH_LIMIT,
+  }));
+  const normalizedLeads = leads.map((lead) => ({ ...lead, lead_id: lead.lead_id || lead.id }));
+  const leadIds = normalizedLeads.map((lead) => lead.lead_id).filter(Boolean);
+  if (leadIds.length === 0) return new Map();
+
+  const byLead = (select, order) => (ids) => new URLSearchParams({
+    select,
+    lead_id: `in.(${ids})`,
+    ...(order ? { order } : {}),
     limit: OUTREACH_LIMIT,
   });
-  const leads = await supabaseRest("v_lead_overview", leadParams);
-  const normalizedLeads = leads.map((lead) => ({ ...lead, lead_id: lead.lead_id || lead.id }));
-  const leadIds = idsForInFilter(normalizedLeads.map((lead) => lead.lead_id));
-  if (!leadIds) return new Map();
-
-  const sequenceParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "updated_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
-  const sendParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "updated_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
-  const eventParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "event_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
-  const magnetParams = new URLSearchParams({ select: "*", lead_id: `in.(${leadIds})`, order: "event_at.desc.nullslast,created_at.desc.nullslast", limit: OUTREACH_LIMIT });
-  const assignmentParams = new URLSearchParams({ select: LEAD_MAGNET_ASSIGNMENT_FIELDS, lead_id: `in.(${leadIds})`, limit: OUTREACH_LIMIT });
-
   const [sequences, sends, events, magnetEvents, toolAssignments] = await Promise.all([
-    supabaseRest("email_sequences", sequenceParams),
-    supabaseRest("email_sends", sendParams),
-    supabaseRest("email_events", eventParams),
-    supabaseRest("lead_magnet_events", magnetParams),
-    supabaseRest("v_lead_magnet_tool_assignments", assignmentParams),
+    supabaseRestIn("email_sequences", leadIds, byLead("*", "updated_at.desc.nullslast,created_at.desc.nullslast")),
+    supabaseRestIn("email_sends", leadIds, byLead("*", "updated_at.desc.nullslast,created_at.desc.nullslast")),
+    supabaseRestIn("email_events", leadIds, byLead("*", "event_at.desc.nullslast,created_at.desc.nullslast")),
+    supabaseRestIn("lead_magnet_events", leadIds, byLead("*", "event_at.desc.nullslast,created_at.desc.nullslast")),
+    supabaseRestIn("v_lead_magnet_tool_assignments", leadIds, byLead(LEAD_MAGNET_ASSIGNMENT_FIELDS)),
   ]);
 
   let suppressions = [];
   const emails = normalizedLeads.map((lead) => lead.primary_email || lead.email).filter(Boolean).map((email) => `"${String(email).toLowerCase()}"`);
   if (emails.length > 0) {
-    const suppressionParams = new URLSearchParams({
+    suppressions = await supabaseRestIn("email_suppression_entries", emails, (values) => new URLSearchParams({
       select: "*",
       // Real schema uses email_address/email_hash; there is no `email` column.
-      email_address: `in.(${idsForInFilter(emails)})`,
+      email_address: `in.(${values})`,
       order: "updated_at.desc.nullslast,created_at.desc.nullslast",
       limit: OUTREACH_LIMIT,
-    });
-    suppressions = await supabaseRest("email_suppression_entries", suppressionParams);
+    }));
   }
 
   const leadsByBrand = groupBy(normalizedLeads, "brand_id");
@@ -516,19 +533,17 @@ export async function loadDashboardBrands({ limit = 500 } = {}) {
 
   if (brands.length === 0) return [];
 
-  const ids = brands.map((brand) => brand.id).join(",");
-  const runParams = new URLSearchParams({
+  const ids = brands.map((brand) => brand.id);
+  const runRows = await supabaseRestIn("service_runs", ids, (chunk) => new URLSearchParams({
     select: RUN_FIELDS,
-    brand_id: `in.(${ids})`,
+    brand_id: `in.(${chunk})`,
     order: "created_at.desc.nullslast",
     limit: "2000",
-  });
-  const runRows = await supabaseRest("service_runs", runParams);
+  }));
 
   let metaScrapeRows = [];
   try {
-    const scrapeParams = buildMetaScrapeParams(ids);
-    metaScrapeRows = await supabaseRest("meta_ad_scrapes", scrapeParams);
+    metaScrapeRows = await supabaseRestIn("meta_ad_scrapes", ids, buildMetaScrapeParams);
   } catch (error) {
     console.warn("No se pudo leer meta_ad_scrapes para enriquecer el resumen Meta Ads", error);
   }

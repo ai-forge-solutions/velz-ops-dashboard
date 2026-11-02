@@ -1,9 +1,13 @@
-const COOKIE_NAME = "velz_dashboard_session";
+import {
+  COOKIE_NAME,
+  createSessionCookie,
+  hasValidSession,
+  timingSafeEqual,
+} from "../shared/session.js";
+
 const LOGIN_PATH = "/auth/login";
 const LOGOUT_PATH = "/auth/logout";
 const RUNTIME_CONFIG_PATH = "/runtime-config.js";
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
-const encoder = new TextEncoder();
 
 function noStoreHeaders(extra = {}) {
   return {
@@ -21,80 +25,12 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-function timingSafeEqual(a, b) {
-  const left = encoder.encode(a);
-  const right = encoder.encode(b);
-  const length = Math.max(left.length, right.length);
-  let diff = left.length ^ right.length;
-
-  for (let i = 0; i < length; i += 1) {
-    diff |= (left[i] || 0) ^ (right[i] || 0);
-  }
-
-  return diff === 0;
-}
-
-function base64UrlFromBytes(bytes) {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-async function hmac(message, secret) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(message));
-  return base64UrlFromBytes(new Uint8Array(signature));
-}
-
-function getCookie(request, name) {
-  const cookies = request.headers.get("cookie") || "";
-  const prefix = `${name}=`;
-  return cookies
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(prefix))
-    ?.slice(prefix.length) || null;
-}
-
 function safeReturnTo(value) {
   if (!value || typeof value !== "string") return "/";
   if (!value.startsWith("/")) return "/";
   if (value.startsWith("//")) return "/";
   if (value.startsWith(LOGIN_PATH) || value.startsWith(LOGOUT_PATH)) return "/";
   return value;
-}
-
-async function createSessionCookie(username, password, sessionSecret) {
-  const expiresAt = Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS;
-  const payload = `${username}:${expiresAt}`;
-  const signature = await hmac(payload, sessionSecret || password);
-  return [
-    `${COOKIE_NAME}=${expiresAt}.${signature}`,
-    "Path=/",
-    "HttpOnly",
-    "Secure",
-    "SameSite=Lax",
-    `Max-Age=${SESSION_MAX_AGE_SECONDS}`,
-  ].join("; ");
-}
-
-async function hasValidSession(request, username, password, sessionSecret) {
-  const raw = getCookie(request, COOKIE_NAME);
-  if (!raw) return false;
-
-  const [expiresAtText, signature] = raw.split(".");
-  const expiresAt = Number(expiresAtText);
-  if (!Number.isFinite(expiresAt) || !signature) return false;
-  if (expiresAt <= Math.floor(Date.now() / 1000)) return false;
-
-  const expected = await hmac(`${username}:${expiresAt}`, sessionSecret || password);
-  return timingSafeEqual(signature, expected);
 }
 
 function renderLoginPage({ returnTo = "/", error = "" } = {}) {
@@ -184,8 +120,6 @@ function loginRedirectFor(request) {
 
 function runtimeConfigResponse() {
   const publicConfig = {
-    VITE_SUPABASE_URL: Netlify.env.get("VITE_SUPABASE_URL") || "",
-    VITE_SUPABASE_ANON_KEY: Netlify.env.get("VITE_SUPABASE_ANON_KEY") || "",
     VITE_CONDUCTOR_BASE_URL: Netlify.env.get("VITE_CONDUCTOR_BASE_URL") || "",
     VITE_OUTREACH_API_BASE_URL: Netlify.env.get("VITE_OUTREACH_API_BASE_URL") || "",
     VITE_OUTREACH_ORCHESTRATION_BASE_URL: Netlify.env.get("VITE_OUTREACH_ORCHESTRATION_BASE_URL") || "",
@@ -267,7 +201,16 @@ export default async (request, context) => {
     sessionSecret,
   );
 
-  if (!isAuthenticated) return loginRedirectFor(request);
+  if (!isAuthenticated) {
+    // API callers (fetch) get a plain 401 instead of the HTML login redirect.
+    if (url.pathname.startsWith("/api/")) {
+      return new Response(JSON.stringify({ message: "Unauthorized" }), {
+        status: 401,
+        headers: noStoreHeaders({ "Content-Type": "application/json; charset=UTF-8" }),
+      });
+    }
+    return loginRedirectFor(request);
+  }
 
   if (url.pathname === RUNTIME_CONFIG_PATH) return runtimeConfigResponse();
 
