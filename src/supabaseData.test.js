@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadDashboardBrands, saveBrandGroup } from "./supabaseData";
+import { chunkInFilterValues, loadDashboardBrands, saveBrandGroup } from "./supabaseData";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -58,5 +58,41 @@ describe("Supabase access through the same-origin proxy", () => {
     await expect(saveBrandGroup({ name: "G", brandIds: [] })).rejects.toThrow(
       "Supabase RPC save_brand_group respondió 400: bad group",
     );
+  });
+});
+
+describe("long in.() filters are split to avoid 414 URI Too Long", () => {
+  it("chunks values by encoded length without dropping or repeating any", () => {
+    const values = Array.from({ length: 500 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    const chunks = chunkInFilterValues([...values, values[0], null]);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.flat()).toEqual(values);
+    for (const chunk of chunks) {
+      expect(encodeURIComponent(chunk.join(",")).length).toBeLessThanOrEqual(4000);
+    }
+  });
+
+  it("loads 500 brands with short URLs and merges every chunk's runs", async () => {
+    const brandRows = Array.from({ length: 500 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+      name: `Brand ${i}`,
+    }));
+    const urls = [];
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      urls.push(url);
+      const parsed = new URL(url, "http://localhost");
+      const table = parsed.pathname.split("/").pop();
+      if (table === "brands") return { ok: true, json: async () => brandRows };
+      if (table === "service_runs") {
+        const ids = parsed.searchParams.get("brand_id").slice(4, -1).split(",");
+        return { ok: true, json: async () => ids.map((id) => ({ id: `run-${id}`, brand_id: id, service_key: "brand_reviews", status: "success" })) };
+      }
+      return { ok: true, json: async () => [] };
+    }));
+    const brands = await loadDashboardBrands();
+    expect(Math.max(...urls.map((url) => url.length))).toBeLessThan(6000);
+    expect(urls.filter((url) => url.includes("/service_runs?")).length).toBeGreaterThan(1);
+    expect(brands).toHaveLength(500);
+    expect(brands.every((brand) => brand.runs.brand_reviews?.status === "success")).toBe(true);
   });
 });
