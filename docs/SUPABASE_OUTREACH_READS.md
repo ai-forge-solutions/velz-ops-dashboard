@@ -1,6 +1,8 @@
 # Supabase Outreach dashboard reads
 
-The Ops Dashboard reads Outreach state with the public Supabase anon key. Keep this read-only. Do not expose service-role keys or direct Saleshandy credentials to the browser.
+> **Superseded:** the dashboard now reads through the server-side proxy (`netlify/functions/supabase-proxy.js`) with the service-role key; the anon grants below are legacy and can be revoked (DB Phase 2).
+
+The Ops Dashboard used to read Outreach state with the public Supabase anon key.
 
 The UI now reads these source-backed objects and treats them as the only status source:
 

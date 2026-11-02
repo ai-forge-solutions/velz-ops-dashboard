@@ -133,31 +133,19 @@ const BRAND_GROUP_FIELDS = [
   "updated_at",
 ].join(",");
 
-function requireSupabaseConfig() {
-  const supabaseUrl = envValue("VITE_SUPABASE_URL");
-  const supabaseAnonKey = envValue("VITE_SUPABASE_ANON_KEY");
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error(
-      "Faltan VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY para leer datos reales de Supabase."
-    );
-  }
-
-  return {
-    url: supabaseUrl.replace(/\/$/, ""),
-    key: supabaseAnonKey,
-  };
-}
+// Supabase is reached only through the same-origin Netlify proxy
+// (netlify/functions/supabase-proxy.js), which holds the server-side key.
+const SUPABASE_PROXY_BASE = "/api/supabase";
 
 async function supabaseRest(path, searchParams = new URLSearchParams()) {
-  const { url, key } = requireSupabaseConfig();
-  const endpoint = new URL(`${url}/rest/v1/${path}`);
-  searchParams.forEach((value, name) => endpoint.searchParams.set(name, value));
+  const params = new URLSearchParams();
+  searchParams.forEach((value, name) => params.set(name, value));
+  const query = params.toString();
+  const endpoint = `${SUPABASE_PROXY_BASE}/rest/${path}${query ? `?${query}` : ""}`;
 
   const response = await fetch(endpoint, {
+    credentials: "same-origin",
     headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
       Accept: "application/json",
     },
   });
@@ -171,12 +159,10 @@ async function supabaseRest(path, searchParams = new URLSearchParams()) {
 }
 
 async function supabaseRpc(functionName, body) {
-  const { url, key } = requireSupabaseConfig();
-  const response = await fetch(`${url}/rest/v1/rpc/${functionName}`, {
+  const response = await fetch(`${SUPABASE_PROXY_BASE}/rpc/${functionName}`, {
     method: "POST",
+    credentials: "same-origin",
     headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
       Accept: "application/json",
       "Content-Type": "application/json",
     },
